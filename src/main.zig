@@ -16,10 +16,18 @@ const TOKEN_COLON = ':';
 /// RFC8259 - value-separator
 const TOKEN_COMMA = ',';
 /// RFC8259 - Insignificant white space
-const TOKEN_SPACE = ' ';
+const TOKEN_SPACE = '\u{20}';
+const TOKEN_TAB = '\u{09}';
+const TOKEN_NEW_LINE = '\u{0A}';
+const TOKEN_CARRIAGE_RETURN = '\u{0D}';
 
+const TOKEN_ZERO = '0';
 const TOKEN_MINUS = '-';
+const TOKEN_PLUS = '+';
 const TOKEN_PERIOD = '.';
+const TOKEN_EXPONENT_LOWER = 'e';
+const TOKEN_EXPONENT_UPPER = 'E';
+
 const TOKEN_BACKSLASH = '\\';
 
 /// RFC8259.3 true value
@@ -31,7 +39,10 @@ const TOKEN_NULL = "null";
 
 pub const ParseError = error {
     GenericError,
-    ParseValueError
+    ParseValueError,
+    ParseObjectError,
+    ParseNumberError,
+    UnexpectedTokenError
 };
 
 pub const ParseErrors = ParseError || Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError;
@@ -99,7 +110,7 @@ const JsonObject = struct {
     /// TODO: Need to handle proper character escaping
     pub fn print(self: *JsonObject, indent: ?usize) void {
         std.debug.print("{{\n", .{});
-        var iv = if (indent) |v| v + 2 else 0;
+        var iv = if (indent) |v| v + 2 else 2;
         for (self.map.keys()) |key, index| {
             var i: usize = 0;
             while (i < iv): (i += 1) {
@@ -207,8 +218,8 @@ const JsonValue = struct {
 
     /// The JSON value
     value: ?union {
-        integer: i32,
-        float: f32,
+        integer: i64,
+        float: f64,
         array: *JsonArray,
         string: []const u8,
         object: *JsonObject,
@@ -287,13 +298,13 @@ const JsonValue = struct {
     }
 
     /// Returns the integer value or panics
-    pub fn integer(self: *JsonValue) i32 {
+    pub fn integer(self: *JsonValue) i64 {
         if (self.value == null) @panic("Value is null");
         return if (self.type == JsonType.integer ) self.value.?.integer else @panic("Not an number");
     }
 
     /// Returns the float value or panics
-    pub fn float(self: *JsonValue) f32 {
+    pub fn float(self: *JsonValue) f64 {
         if (self.value == null) @panic("Value is null");
         return if (self.type == JsonType.float ) self.value.?.float else @panic("Not an float");
     }
@@ -321,12 +332,12 @@ const JsonValue = struct {
     }
 
     /// Returns the integer value or null
-    pub fn integerOrNull(self: *JsonValue) ?i32 {
+    pub fn integerOrNull(self: *JsonValue) ?i64 {
         return if (self.value == null or self.type == JsonType.integer) self.value.integer else null;
     }
 
     /// Returns the float value or null
-    pub fn floatOrNull(self: *JsonValue) ?f32 {
+    pub fn floatOrNull(self: *JsonValue) ?f64 {
         return if (self.value == null or self.type == JsonType.float) self.value.float else null;
     }
 
@@ -364,7 +375,7 @@ var JSON_TRUE = JsonValue {
 var JSON_FALSE = JsonValue {
     .type = JsonType.boolean,
     .value = .{ .boolean = false },
-    .indestructible = false,
+    .indestructible = true,
     .stringPtr = null
 };
 
@@ -410,7 +421,7 @@ fn parseValue(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
 
         // " indicates a string
         if (char == TOKEN_DOUBLE_QUOTE) {
-            var result = try parseString(jsonString[index..jsonString.len], allocator, TOKEN_DOUBLE_QUOTE, &index);
+            var result = try parseStringWithTerminal(jsonString[index..jsonString.len], allocator, TOKEN_DOUBLE_QUOTE, &index);
             errdefer {
                 result.deinit(allocator);
                 allocator.destroy(result);
@@ -421,7 +432,7 @@ fn parseValue(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
         // ' indicates a string (probably remove?)
         if (char == TOKEN_SINGLE_QUOTE) {
             index += 1;
-            var result = try parseString(jsonString[index..jsonString.len], allocator, TOKEN_SINGLE_QUOTE, &index);
+            var result = try parseStringWithTerminal(jsonString[index..jsonString.len], allocator, TOKEN_SINGLE_QUOTE, &index);
             errdefer {
                 result.deinit(allocator);
                 allocator.destroy(result);
@@ -440,14 +451,17 @@ fn parseValue(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
         }
 
         if (isTrueValue(jsonString[index..jsonString.len])) {
+            index += TOKEN_TRUE.len;
             break :result &JSON_TRUE;
         }
 
         if (isFalseValue(jsonString[index..jsonString.len])) {
+            index += TOKEN_FALSE.len;
             break :result &JSON_FALSE;
         }
 
         if (isNullValue(jsonString[index..jsonString.len])) {
+            index += TOKEN_NULL.len;
             break :result &JSON_NULL;
         }
 
@@ -476,22 +490,22 @@ fn parseObject(jsonString: []const u8, allocator: Allocator, outIndex: *usize) P
     var index = try expect(jsonString, TOKEN_CURLY_BRACKET_OPEN);
     while (index < jsonString.len and jsonString[index] != TOKEN_CURLY_BRACKET_CLOSE) {
         const char = jsonString[index];
-        if (char == TOKEN_COMMA or isWhiteSpace(char)) {
+        if (char == TOKEN_COMMA or isInsignificantWhitespace(char)) {
             index += 1;
             continue;
         }
         const key = key: {
             if (char == TOKEN_DOUBLE_QUOTE) {
-                var result = try parseString(jsonString[index..jsonString.len], allocator, TOKEN_DOUBLE_QUOTE, &index);
+                var result = try parseStringWithTerminal(jsonString[index..jsonString.len], allocator, TOKEN_DOUBLE_QUOTE, &index);
                 errdefer allocator.destroy(result);
                 break :key result;
             }
             if (char == TOKEN_SINGLE_QUOTE) {
-                var result = try parseString(jsonString[index..jsonString.len], allocator, TOKEN_SINGLE_QUOTE, &index);
+                var result = try parseStringWithTerminal(jsonString[index..jsonString.len], allocator, TOKEN_SINGLE_QUOTE, &index);
                 errdefer allocator.destroy(result);
                 break :key result;
             }
-            return error.GenericError;
+            return error.ParseObjectError;
         };
         errdefer {
             key.deinit(allocator);
@@ -538,8 +552,8 @@ fn parseArray(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
 
     var index = try expect(jsonString, TOKEN_BRACKET_OPEN);
     while (index < jsonString.len and jsonString[index] != TOKEN_BRACKET_CLOSE) {
-        const char = jsonString[index];
-        if (char == TOKEN_COMMA or isWhiteSpace(char)) {
+        // Skip commas and insignificant whitespaces
+        if (jsonString[index] == TOKEN_COMMA or isInsignificantWhitespace(jsonString[index])) {
             index += 1;
             continue;
         }
@@ -548,7 +562,6 @@ fn parseArray(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
             jsonValue.deinit(allocator);
             allocator.destroy(jsonValue);
         }
-
         try jsonArray.array.append(jsonValue);
     }
 
@@ -566,13 +579,11 @@ fn parseArray(jsonString: []const u8, allocator: Allocator, outIndex: *usize) Pa
 
 /// Parse a string from the provided slice
 /// Returns the index of the next character to read
-fn parseString(jsonString: []const u8, allocator: Allocator, terminal: u8, outIndex: *usize) ParseErrors!*JsonValue {
-    var i = try expectOnly(jsonString, terminal);
+fn parseStringWithTerminal(jsonString: []const u8, allocator: Allocator, terminal: u8, outIndex: *usize) ParseErrors!*JsonValue {
+    var i = try expectUpTo(jsonString, terminal);
     var slashCount: usize = 0;
     var characters = std.ArrayList(u8).init(allocator);
-
-    while (i < jsonString.len
-            and (jsonString[i] != terminal or slashCount % 2 == 1)): (i += 1) {
+    while (i < jsonString.len and (jsonString[i] != terminal or slashCount % 2 == 1)): (i += 1) {
         // Track escaping
         if (jsonString[i] == TOKEN_BACKSLASH) {
             slashCount += 1;
@@ -613,51 +624,109 @@ fn parseString(jsonString: []const u8, allocator: Allocator, terminal: u8, outIn
 fn parseNumber(jsonString: []const u8, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
     var numberType = JsonType.integer;
     var i: usize = 0;
-    while (i <= jsonString.len and jsonString[i] != TOKEN_COMMA and !isWhiteSpace(jsonString[i])): (i += 1) {
-        if (jsonString[i] == TOKEN_PERIOD) {
-            numberType = JsonType.float;
+    
+    // First character can be a minus or number
+    if (!isNumberOrMinus(jsonString[i])) {
+        return error.ParseNumberError;
+    }
+    // Increment past the first character
+    i += 1;
+
+    // Walk through each character
+    while (i < jsonString.len and isNumber(jsonString[i])): (i += 1) {
+        if (i > 0 and jsonString[i - 1] == TOKEN_ZERO and jsonString[i] == TOKEN_ZERO) {
+            return error.ParseNumberError;
         }
     }
-    if (i >= jsonString.len) @panic("Fail");
+
+    // Handle decimal numbers
+    if (i < jsonString.len and jsonString[i] == TOKEN_PERIOD) {
+        numberType = JsonType.float;
+        i += 1;
+        while (i < jsonString.len and isNumber(jsonString[i])): (i += 1) { }
+    }
+
+    // Handle exponent
+    if (i < jsonString.len and (jsonString[i] == TOKEN_EXPONENT_LOWER or jsonString[i] == TOKEN_EXPONENT_UPPER)) {
+        numberType = JsonType.float;
+        i += 1;
+        if (!isNumberOrMinusOrPlus(jsonString[i])) {
+            return error.ParseNumberError;
+        }
+        // Handle preceeding +/-
+        i += 1;
+        // Handle the exponent value
+        while (i < jsonString.len and isNumber(jsonString[i])): (i += 1) { }
+    }
+
+    if (i > jsonString.len) @panic("Fail");
     const jsonValue = try allocator.create(JsonValue);
     errdefer allocator.destroy(jsonValue);
     jsonValue.type = numberType;
     jsonValue.value = switch (numberType) {
-        JsonType.integer => .{ .integer = try std.fmt.parseInt(i32, jsonString[0..i], 10) },
-        JsonType.float => .{ .float = try std.fmt.parseFloat(f32, jsonString[0..i]) },
+        JsonType.integer => .{ .integer = try std.fmt.parseInt(i64, jsonString[0..i], 10) },
+        JsonType.float => .{ .float = try std.fmt.parseFloat(f64, jsonString[0..i]) },
         else => return error.GenericError
     };
     outIndex.* += i;
     return jsonValue;
 }
 
-fn expect(jsonString: []const u8, token: u8) !usize {
+/// Expects the next significant character be token, skipping over all leading and trailing
+/// insignificant whitespace, or returns UnexpectedTokenError.
+fn expect(jsonString: []const u8, token: u8) ParseErrors!usize {
     var index = skipWhiteSpaces(jsonString);
-    if (jsonString[index] != token) @panic("Expected token");
+    if (jsonString[index] != token) return error.UnexpectedTokenError;
     return skipWhiteSpacesAfter(jsonString, index + 1);
 }
 
-fn expectOnly(jsonString: []const u8, token: u8) !usize {
-    if (jsonString[0] != token) @panic("Expected token");
+/// Expects the next character be token or returns UnexpectedTokenError.
+fn expectOnly(jsonString: []const u8, token: u8) ParseErrors!usize {
+    if (jsonString[0] != token) return error.UnexpectedTokenError;
     return 1;
 }
 
+/// Expects the next significant character be token, skipping over all leading insignificant
+/// whitespace, or returns UnexpectedTokenError.
+fn expectUpTo(jsonString: []const u8, token: u8) ParseErrors!usize {
+    var index = skipWhiteSpaces(jsonString);
+    if (jsonString[index] != token) return error.UnexpectedTokenError;
+    return index + 1;
+}
+
+/// Returns the index in the string with the next, significant character
+/// starting from the beginning.
 fn skipWhiteSpaces(jsonString: []const u8) usize {
     return skipWhiteSpacesAfter(jsonString, 0);
 }
 
+/// Returns the index in the string with the next, significant character
+/// starting after start.
 fn skipWhiteSpacesAfter(jsonString: []const u8, start: usize) usize {
     var i: usize = start;
-    while (i <= jsonString.len and isWhiteSpace(jsonString[i])): (i += 1) { }
+    while (i <= jsonString.len and isInsignificantWhitespace(jsonString[i])): (i += 1) { }
     return i;
 }
 
-fn isWhiteSpace(char: u8) bool {
-    return char == TOKEN_SPACE;
+/// Returns true if a character matches the RFC8259 grammar specificiation for
+/// insignificant whitespace.
+fn isInsignificantWhitespace(char: u8) bool {
+    return char == TOKEN_SPACE
+        or char == TOKEN_TAB
+        or char == TOKEN_NEW_LINE
+        or char == TOKEN_CARRIAGE_RETURN;
+}
+
+fn isNumberOrMinusOrPlus(char: u8) bool {
+    return char == TOKEN_MINUS or char == TOKEN_PLUS or isNumber(char);
 }
 
 fn isNumberOrMinus(char: u8) bool {
-    return char == TOKEN_MINUS or (char >= 48 and char <= 57);
+    return char == TOKEN_MINUS or isNumber(char);
+}
+
+fn isNumber(char: u8) bool {
+    return (char >= 48 and char <= 57);
 }
 
 fn isEscapable(char: u8) bool {
@@ -681,6 +750,10 @@ fn isNullValue(jsonString: []const u8) bool {
         and std.mem.eql(u8, jsonString[0..TOKEN_NULL.len], TOKEN_NULL);
 }
 
+fn debug(comptime msg: []const u8, args: anytype) void {
+    std.debug.print(msg, args);
+}
+
 // Unit Tests
 test "RFC8259.3: parseValue can parse true" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -689,8 +762,8 @@ test "RFC8259.3: parseValue can parse true" {
     const text = "true";
     var index: usize = 0;
     const value = try parseValue(text, allocator, &index);
-    try std.testing.expect(value.type == JsonType.boolean);
-    try std.testing.expect(value.boolean() == true);
+    try std.testing.expectEqual(value.type, JsonType.boolean);
+    try std.testing.expectEqual(value.boolean(), true);
 
     // Note: true, false, and null are constant JsonValues
     // and should not be destroyed
@@ -705,8 +778,8 @@ test "RFC8259.3: parseValue can parse false" {
     const text = "false";
     var index: usize = 0;
     const value = try parseValue(text, allocator, &index);
-    try std.testing.expect(value.type == JsonType.boolean);
-    try std.testing.expect(value.boolean() == false);
+    try std.testing.expectEqual(value.type, JsonType.boolean);
+    try std.testing.expectEqual(value.boolean(), false);
 
     // Note: true, false, and null are constant JsonValues
     // and should not be destroyed
@@ -721,7 +794,7 @@ test "RFC8259.3: parseValue can parse null" {
     const text = "null";
     var index: usize = 0;
     const value = try parseValue(text, allocator, &index);
-    try std.testing.expect(value.type == JsonType.nil);
+    try std.testing.expectEqual(value.type, JsonType.nil);
     try std.testing.expect(value.value == null);
 
     // Note: true, false, and null are constant JsonValues
@@ -741,8 +814,8 @@ test "RFC8259.4: parseObject can parse an empty object /1" {
         value.deinit(allocator);
         allocator.destroy(value);
     }
-    try std.testing.expect(value.type == JsonType.object);
-    try std.testing.expect(value.object().len() == 0);
+    try std.testing.expectEqual(value.type, JsonType.object);
+    try std.testing.expectEqual(value.object().len(), 0);
 
     value.deinit(allocator);
     allocator.destroy(value);
@@ -761,8 +834,8 @@ test "RFC8259.4: parseObject can parse an empty object /2" {
         value.deinit(allocator);
         allocator.destroy(value);
     }
-    try std.testing.expect(value.type == JsonType.object);
-    try std.testing.expect(value.object().len() == 0);
+    try std.testing.expectEqual(value.type, JsonType.object);
+    try std.testing.expectEqual(value.object().len(), 0);
 
     value.deinit(allocator);
     allocator.destroy(value);
@@ -770,52 +843,53 @@ test "RFC8259.4: parseObject can parse an empty object /2" {
     try std.testing.expect(!gpa.deinit());
 }
 
-// test "RFC8259.4: parseObject can parse an empty object /3" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-//     const allocator = gpa.allocator();
+test "RFC8259.4: parseObject can parse an empty object /3" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-//     const text = "{ \t}";
-//     var index: usize = 0;
-//     const value = try parseValue(text, allocator, &index);
-//     errdefer {
-//         value.deinit(allocator);
-//         allocator.destroy(value);
-//     }
-//     try std.testing.expect(value.type == JsonType.object);
-//     try std.testing.expect(value.object().len() == 0);
+    // Create an empty object with all insignificant whitespace characters
+    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
+    var index: usize = 0;
+    const value = try parseValue(text, allocator, &index);
+    errdefer {
+        value.deinit(allocator);
+        allocator.destroy(value);
+    }
+    try std.testing.expectEqual(value.type, JsonType.object);
+    try std.testing.expectEqual(value.object().len(), 0);
 
-//     value.deinit(allocator);
-//     allocator.destroy(value);
+    value.deinit(allocator);
+    allocator.destroy(value);
 
-//     try std.testing.expect(!gpa.deinit());
-// }
+    try std.testing.expect(!gpa.deinit());
+}
 
-test "RFC8259.4: parseObject can parse a simple object" {
+test "RFC8259.4: parseObject can parse a simple object /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
     var jsonResult = try parse("{\"key1\": \"foo\", \"key2\": \"foo2\", \"key3\": -1, \"key4\": [], \"key5\": { } }", allocator);
-    try std.testing.expect(jsonResult.type == JsonType.object);
+    try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
-    try std.testing.expect(jsonResult.object().contains("key1") == true);
-    try std.testing.expect(jsonResult.get("key1").type == JsonType.string);
+    try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
+    try std.testing.expectEqual(jsonResult.get("key1").type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, jsonResult.get("key1").string(), "foo"));
 
-    try std.testing.expect(jsonResult.object().contains("key2") == true);
-    try std.testing.expect(jsonResult.get("key2").type == JsonType.string);
+    try std.testing.expectEqual(jsonResult.object().contains("key2"), true);
+    try std.testing.expectEqual(jsonResult.get("key2").type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, jsonResult.get("key2").string(), "foo2"));
 
-    try std.testing.expect(jsonResult.object().contains("key3") == true);
-    try std.testing.expect(jsonResult.get("key3").type == JsonType.integer);
-    try std.testing.expect(jsonResult.get("key3").integer() == -1);
+    try std.testing.expectEqual(jsonResult.object().contains("key3"), true);
+    try std.testing.expectEqual(jsonResult.get("key3").type, JsonType.integer);
+    try std.testing.expectEqual(jsonResult.get("key3").integer(), -1);
 
-    try std.testing.expect(jsonResult.object().contains("key4") == true);
-    try std.testing.expect(jsonResult.get("key4").type == JsonType.array);
-    try std.testing.expect(jsonResult.get("key4").len() == 0);
+    try std.testing.expectEqual(jsonResult.object().contains("key4"), true);
+    try std.testing.expectEqual(jsonResult.get("key4").type, JsonType.array);
+    try std.testing.expectEqual(jsonResult.get("key4").len(), 0);
 
-    try std.testing.expect(jsonResult.object().contains("key5") == true);
-    try std.testing.expect(jsonResult.get("key5").type == JsonType.object);
-    try std.testing.expect(jsonResult.get("key5").len() == 0);
+    try std.testing.expectEqual(jsonResult.object().contains("key5"), true);
+    try std.testing.expectEqual(jsonResult.get("key5").type, JsonType.object);
+    try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
     allocator.destroy(jsonResult);
@@ -823,7 +897,44 @@ test "RFC8259.4: parseObject can parse a simple object" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "RFC8259.5: parseArray can parse an empty array" {
+test "RFC8259.4: parseObject can parse a simple object /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
+    // characters
+    var jsonResult = try parse(
+        "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key1\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key3\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key4\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key5\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}",
+        allocator);
+    try std.testing.expectEqual(jsonResult.type, JsonType.object);
+
+    try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
+    try std.testing.expectEqual(jsonResult.get("key1").type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, jsonResult.get("key1").string(), "foo"));
+
+    try std.testing.expectEqual(jsonResult.object().contains("key2"), true);
+    try std.testing.expectEqual(jsonResult.get("key2").type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, jsonResult.get("key2").string(), "foo2"));
+
+    try std.testing.expectEqual(jsonResult.object().contains("key3"), true);
+    try std.testing.expectEqual(jsonResult.get("key3").type, JsonType.integer);
+    try std.testing.expectEqual(jsonResult.get("key3").integer(), -1);
+
+    try std.testing.expectEqual(jsonResult.object().contains("key4"), true);
+    try std.testing.expectEqual(jsonResult.get("key4").type, JsonType.array);
+    try std.testing.expectEqual(jsonResult.get("key4").len(), 0);
+
+    try std.testing.expectEqual(jsonResult.object().contains("key5"), true);
+    try std.testing.expectEqual(jsonResult.get("key5").type, JsonType.object);
+    try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
+
+    jsonResult.deinit(allocator);
+    allocator.destroy(jsonResult);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.5: parseArray can parse an empty array /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -834,8 +945,8 @@ test "RFC8259.5: parseArray can parse an empty array" {
         value.deinit(allocator);
         allocator.destroy(value);
     }
-    try std.testing.expect(value.type == JsonType.array);
-    try std.testing.expect(value.array().len() == 0);
+    try std.testing.expectEqual(value.type, JsonType.array);
+    try std.testing.expectEqual(value.array().len(), 0);
 
     value.deinit(allocator);
     allocator.destroy(value);
@@ -843,66 +954,488 @@ test "RFC8259.5: parseArray can parse an empty array" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "can parse string value" {
+test "RFC8259.5: parseArray can parse an empty array /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(!gpa.deinit());
     const allocator = gpa.allocator();
 
-    var jsonResult = try parse("\"some-string value 1902730918\"", allocator);
-    try std.testing.expect(jsonResult.type == JsonType.string);
-    try std.testing.expect(std.mem.eql(u8, jsonResult.string(), "some-string value 1902730918"));
-
-    defer {
-        jsonResult.deinit(allocator);
-        allocator.destroy(jsonResult);
+    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
+    var index: usize = 0;
+    const value = try parseArray(text, allocator, &index);
+    errdefer {
+        value.deinit(allocator);
+        allocator.destroy(value);
     }
+    try std.testing.expectEqual(value.type, JsonType.array);
+    try std.testing.expectEqual(value.array().len(), 0);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
 }
 
-test "can parse string array value" {
+test "RFC8259.5: parseArray can parse an simple array /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(!gpa.deinit());
     const allocator = gpa.allocator();
 
-    var jsonResult = try parse("[\"some-string value 1902730918\", \"foo\"]", allocator);
-    try std.testing.expect(jsonResult.type == JsonType.array);
-    try std.testing.expect(std.mem.eql(u8, jsonResult.get(0).string(), "some-string value 1902730918"));
-    try std.testing.expect(std.mem.eql(u8, jsonResult.get(1).string(), "foo"));
-
-    defer {
-        jsonResult.deinit(allocator);
-        allocator.destroy(jsonResult);
+    // 
+    const text = "[-1,-1.2,0,1,1.2,\"\",\"foo\",true,false,null,{},{\"foo\":\"bar\", \"baz\": {}}]";
+    var index: usize = 0;
+    const value = try parseArray(text, allocator, &index);
+    errdefer {
+        value.deinit(allocator);
+        allocator.destroy(value);
     }
+    try std.testing.expectEqual(value.type, JsonType.array);
+    try std.testing.expectEqual(value.array().len(), 12);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
 }
 
-test "can parse object" {
+test "RFC8259.5: parseArray can parse an simple array /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer std.debug.assert(!gpa.deinit());
     const allocator = gpa.allocator();
 
-    var jsonResult = try parse("{ \"key1\" : \"val1\", \"key2\":\"val2\",\"key3\": 1, \"key4\": -1, \"key5\": 1.0, \"key6\": [\"asdf\"],\"nested-array\":[[[]]] }", allocator);
-    try std.testing.expect(jsonResult.type == JsonType.object);
-    try std.testing.expect(jsonResult.object().contains("key1") == true);
-    try std.testing.expect(jsonResult.object().contains("key2") == true);
-    try std.testing.expect(jsonResult.object().contains("key3") == true);
-    try std.testing.expect(jsonResult.object().contains("key4") == true);
-    try std.testing.expect(jsonResult.object().contains("key5") == true);
-    try std.testing.expect(jsonResult.get("key1").type == JsonType.string);
-    try std.testing.expect(std.mem.eql(u8, jsonResult.get("key1").string(), "val1"));
-
-    try std.testing.expect(jsonResult.get("key2").type == JsonType.string);
-    try std.testing.expect(std.mem.eql(u8, jsonResult.get("key2").string(), "val2"));
-
-    try std.testing.expect(jsonResult.get("key3").type == JsonType.integer);
-    try std.testing.expect(jsonResult.get("key3").integer() == 1);
-
-    try std.testing.expect(jsonResult.get("key4").type == JsonType.integer);
-    try std.testing.expect(jsonResult.get("key4").integer() == -1);
-    
-    try std.testing.expect(jsonResult.get("key5").type == JsonType.float);
-    try std.testing.expect(jsonResult.get("key5").float() == 1.0);
-    
-    defer {
-        jsonResult.deinit(allocator);
-        allocator.destroy(jsonResult);
+    // 
+    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}0\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}true\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}false\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}null\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"bar\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"baz\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
+    var index: usize = 0;
+    const value = try parseArray(text, allocator, &index);
+    errdefer {
+        value.deinit(allocator);
+        allocator.destroy(value);
     }
+    try std.testing.expectEqual(value.type, JsonType.array);
+    try std.testing.expectEqual(value.array().len(), 12);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a integer /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "0";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.integer);
+    try std.testing.expectEqual(value.integer(), 0);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a integer /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "1";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.integer);
+    try std.testing.expectEqual(value.integer(), 1);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a integer /3" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "1337";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.integer);
+    try std.testing.expectEqual(value.integer(), 1337);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a integer /4" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-1337";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.integer);
+    try std.testing.expectEqual(value.integer(), -1337);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a float /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "1.0";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 1.0);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a float /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-1.0";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), -1.0);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a float /3" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "1337.0123456789";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 1337.0123456789);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse a float /4" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-1337.0123456789";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), -1337.0123456789);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "13e37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 13e37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "13E37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 13E37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /3" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "13E+37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 13E+37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /4" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "13E-37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 13E-37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /5" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-13e37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), -13e37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /6" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-13E37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), -13E37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /7" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "-13E+37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), -13E+37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber can parse an exponent /8" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "13E-37";
+    var index: usize = 0;
+    const value = try parseNumber(text, allocator, &index);
+    try std.testing.expectEqual(value.type, JsonType.float);
+    try std.testing.expectEqual(value.float(), 13E-37);
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber fails on a repeating 0" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "00";
+    var index: usize = 0;
+    const value = parseNumber(text, allocator, &index);
+    try std.testing.expectError(error.ParseNumberError, value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "a0";
+    var index: usize = 0;
+    const value = parseNumber(text, allocator, &index);
+    try std.testing.expectError(error.ParseNumberError, value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "+0";
+    var index: usize = 0;
+    const value = parseNumber(text, allocator, &index);
+    try std.testing.expectError(error.ParseNumberError, value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse an empty string /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "\"\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), ""));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse an empty string /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), ""));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse a simple string /1" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "\"some string\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "some string"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse a simple string /2" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const text = "\"some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse a simple string /3" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // some\"string
+    const text = "\"some\\\"string\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "some\"string"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse a simple string /4" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // some\\"string
+    const text = "\"some\\\\\\\"string\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "some\\\"string"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.7: parseStringWithTerminal can parse a simple string /5" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // ",\,\u{00-0f}
+    const text = "\"\\\"\\\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "\"\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
+}
+
+test "RFC8259.8.3: parseStringWithTerminal parsing results in equivalent strings" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    // Test that \\ equals \u{5C}
+    const text = "\"a\\\\b\"";
+    var index: usize = 0;
+    const value = try parseStringWithTerminal(text, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    try std.testing.expectEqual(value.type, JsonType.string);
+    try std.testing.expect(std.mem.eql(u8, value.string(), "a\u{5C}b"));
+
+    value.deinit(allocator);
+    allocator.destroy(value);
+
+    try std.testing.expect(!gpa.deinit());
 }
