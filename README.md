@@ -32,12 +32,14 @@ defer std.debug.assert(!gpa.deinit());
 const allocator = gpa.allocator();
 
 const value = try json.parse("{\"foo\": [null, true, false, \"bar\", {\"baz\": -13e+37}]}", allocator);
-const baz = value.get("foo").get(4);
-baz.print(null);
+const bazObj = value.get("foo").get(4);
+
+bazObj.print(null);
+try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
 defer {
-    jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
+    value.deinit(allocator);
+    allocator.destroy(value);
 }
 ```
 
