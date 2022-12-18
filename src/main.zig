@@ -1,33 +1,50 @@
+///! Simple JSON parsing library with a focus on a simple, usable API.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// RFC8259 - quotation mark
 const TOKEN_DOUBLE_QUOTE = '"';
+/// TODO: Probably remove support ¯\_(ツ)_/¯
 const TOKEN_SINGLE_QUOTE = '\'';
-/// RFC8259 - begin-object
+
+/// RFC8259.2 - begin-object
 const TOKEN_CURLY_BRACKET_OPEN = '{';
-/// RFC8259 - end-object
+/// RFC8259.2 - end-object
 const TOKEN_CURLY_BRACKET_CLOSE = '}';
-/// RFC8259 - begin-array
-const TOKEN_BRACKET_OPEN = '[';
-/// RFC8259 - end-array
-const TOKEN_BRACKET_CLOSE = ']';
-/// RFC8259 - name-separator
+/// RFC8259.2 - name-separator
 const TOKEN_COLON = ':';
-/// RFC8259 - value-separator
+
+/// RFC8259.2 - begin-array
+const TOKEN_BRACKET_OPEN = '[';
+/// RFC8259.2 - end-array
+const TOKEN_BRACKET_CLOSE = ']';
+/// RFC8259.2 - value-separator
 const TOKEN_COMMA = ',';
-/// RFC8259 - Insignificant white space
+
+/// RFC8259.2 - Insignificant white space
 const TOKEN_SPACE = '\u{20}';
+/// RFC8259.2 - Horizonal feed / tab
 const TOKEN_TAB = '\u{09}';
+/// RFC8259.2 - New line / line feed
 const TOKEN_NEW_LINE = '\u{0A}';
+/// RFC8259.2 - Carriage return
 const TOKEN_CARRIAGE_RETURN = '\u{0D}';
 
+/// RFC8259.6 - Zero
 const TOKEN_ZERO = '0';
+/// RFC8259.6 - Minus
 const TOKEN_MINUS = '-';
+/// RFC8259.6 - Plus
 const TOKEN_PLUS = '+';
+/// RFC8259.6 - Decimal-point
 const TOKEN_PERIOD = '.';
+/// RFC8259.6 - Exp e
 const TOKEN_EXPONENT_LOWER = 'e';
+/// RFC8259.6 - Exp E
 const TOKEN_EXPONENT_UPPER = 'E';
 
+/// RFC8259.7 - Reverse solidus
 const TOKEN_BACKSLASH = '\\';
 
 /// RFC8259.3 true value
@@ -37,16 +54,23 @@ const TOKEN_FALSE = "false";
 /// RFC8259.3 null value
 const TOKEN_NULL = "null";
 
+/// Parser specific errors
 pub const ParseError = error {
-    GenericError,
+    /// Returned when failing to determine the type of value to parse
     ParseValueError,
+    /// Returned when failing to parse an object
     ParseObjectError,
+    /// Returned when failing to parse a number
     ParseNumberError,
+    /// Returned when failing to parse a string
+    ParseStringError,
     UnexpectedTokenError
 };
 
+/// All parser errors including allocation, and int/float parsing errors.
 pub const ParseErrors = ParseError || Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError;
 
+/// The possible types of JSON values
 pub const JsonType = enum {
     object,
     array,
@@ -365,6 +389,7 @@ const JsonValue = struct {
     }
 };
 
+/// "Constant" for JSON true value
 var JSON_TRUE = JsonValue {
     .type = JsonType.boolean,
     .value = .{ .boolean = true },
@@ -372,6 +397,7 @@ var JSON_TRUE = JsonValue {
     .stringPtr = null
 };
 
+/// "Constant" for JSON false value
 var JSON_FALSE = JsonValue {
     .type = JsonType.boolean,
     .value = .{ .boolean = false },
@@ -379,6 +405,7 @@ var JSON_FALSE = JsonValue {
     .stringPtr = null
 };
 
+/// "Constant" for JSON null value
 var JSON_NULL = JsonValue {
     .type = JsonType.nil,
     .value = null,
@@ -598,7 +625,7 @@ fn parseStringWithTerminal(jsonString: []const u8, allocator: Allocator, termina
         }
     }
 
-    if (i >= jsonString.len) @panic("Fail");
+    if (i >= jsonString.len) return error.ParseStringError;
 
     const jsonValue = try allocator.create(JsonValue);
     errdefer allocator.destroy(jsonValue);
@@ -666,7 +693,7 @@ fn parseNumber(jsonString: []const u8, allocator: Allocator, outIndex: *usize) P
     jsonValue.value = switch (numberType) {
         JsonType.integer => .{ .integer = try std.fmt.parseInt(i64, jsonString[0..i], 10) },
         JsonType.float => .{ .float = try std.fmt.parseFloat(f64, jsonString[0..i]) },
-        else => return error.GenericError
+        else => return error.ParseNumberError
     };
     outIndex.* += i;
     return jsonValue;
@@ -717,39 +744,40 @@ fn isInsignificantWhitespace(char: u8) bool {
         or char == TOKEN_CARRIAGE_RETURN;
 }
 
+/// Returns true if the character is a number, minus, or plus
 fn isNumberOrMinusOrPlus(char: u8) bool {
     return char == TOKEN_MINUS or char == TOKEN_PLUS or isNumber(char);
 }
 
+/// Returns true if the character is a number or minus
 fn isNumberOrMinus(char: u8) bool {
     return char == TOKEN_MINUS or isNumber(char);
 }
 
+/// Returns true if the character is a number
 fn isNumber(char: u8) bool {
     return (char >= 48 and char <= 57);
 }
 
-fn isEscapable(char: u8) bool {
-    return char == TOKEN_DOUBLE_QUOTE
-           or char == TOKEN_SINGLE_QUOTE
-           or char == TOKEN_BACKSLASH;
-}
-
+/// Returns true if the next token in the string is TOKEN_TRUE
 fn isTrueValue(jsonString: []const u8) bool {
     return TOKEN_TRUE.len <= jsonString.len
         and std.mem.eql(u8, jsonString[0..TOKEN_TRUE.len], TOKEN_TRUE);
 }
 
+/// Returns true if the next token in the string is TOKEN_FALSE
 fn isFalseValue(jsonString: []const u8) bool {
     return TOKEN_FALSE.len <= jsonString.len
         and std.mem.eql(u8, jsonString[0..TOKEN_FALSE.len], TOKEN_FALSE);
 }
 
+/// Returns true if the next token in the string is TOKEN_NULL
 fn isNullValue(jsonString: []const u8) bool {
     return TOKEN_NULL.len <= jsonString.len
         and std.mem.eql(u8, jsonString[0..TOKEN_NULL.len], TOKEN_NULL);
 }
 
+/// Helper for printing messages
 fn debug(comptime msg: []const u8, args: anytype) void {
     std.debug.print(msg, args);
 }
