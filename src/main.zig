@@ -105,6 +105,7 @@ const JsonObject = struct {
         self.map.deinit();
     }
 
+    /// Returns the number of members in the object
     pub fn len(self: *JsonObject) usize {
         return self.map.count();
     }
