@@ -1,6 +1,6 @@
 # zig-json
 
-Simple JSON parsing library with a focus on a simple, usable API.
+Simple JSON ([RFC8259 Spec](https://www.rfc-editor.org/rfc/rfc8259)) and JSON5 ([JSON5 Spec](https://spec.json5.org)) parsing library with a focus on a simple, usable API.
 
 _Note: The simple and usable part is a WIP :)_
 
@@ -31,7 +31,65 @@ var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 defer std.debug.assert(!gpa.deinit());
 const allocator = gpa.allocator();
 
-const value = try json.parse("{\"foo\": [null, true, false, \"bar\", {\"baz\": -13e+37}]}", allocator);
+const value = try json.parse(
+    \\{
+    \\  "foo": [
+    \\    null,
+    \\    true,
+    \\    false,
+    \\    \"bar\",
+    \\    {
+    \\      "baz": -13e+37
+    \\    }
+    \\  ]
+    \\}
+    , allocator);
+const bazObj = value.get("foo").get(4);
+
+bazObj.print(null);
+try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
+
+defer {
+    value.deinit(allocator);
+    allocator.destroy(value);
+}
+```
+
+```bash
+{
+  "baz": -130000000000000000000000000000000000000
+}%
+```
+
+## JSON5
+
+```zig
+const json = @import("json");
+
+// ...
+
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+defer std.debug.assert(!gpa.deinit());
+const allocator = gpa.allocator();
+
+const value = try parseJson5(
+    \\{
+    \\  foo: [
+    \\    /* Some
+    \\     * multi-line comment
+    \\     */ null,
+    \\    true,
+    \\    false,
+    \\    "bar",
+    \\    // Single line comment
+    \\    {
+    \\      baz: -13e+37,
+    \\      'nan': NaN,
+    \\      inf: +Infinity,
+    \\    },
+    \\  ],
+    \\}
+    , allocator);
 const bazObj = value.get("foo").get(4);
 
 bazObj.print(null);
