@@ -152,13 +152,14 @@ const JsonObject = struct {
             // Values are *JsonValues and must be deinit'd and destroyed
             if (!entry.value.indestructible) {
                 entry.value.deinit(allocator);
-                allocator.destroy(entry.value);
             }
         }
 
         // Clean the map
         self.map.clearAndFree();
         self.map.deinit();
+
+        allocator.destroy(self);
     }
 
     /// Returns the number of members in the object
@@ -228,11 +229,12 @@ const JsonArray = struct {
             // Elements are *JsonValues so they need to be deinit'd and destroyed
             if (!item.indestructible) {
                 item.deinit(allocator);
-                allocator.destroy(item);
             }
         }
         self.array.clearAndFree();
         self.array.deinit();
+
+        allocator.destroy(self);
     }
 
     /// The length of the array
@@ -324,17 +326,17 @@ const JsonValue = struct {
         if (self.value) |value| {
             if (self.type == JsonType.object) {
                 value.object.deinit(allocator);
-                allocator.destroy(value.object);
             }
             if (self.type == JsonType.array) {
                 value.array.deinit(allocator);
-                allocator.destroy(value.array);
             }
             if (self.type == JsonType.string) {
                 if (self.stringPtr) |stringPtr|
                 allocator.free(stringPtr);
             }
         }
+
+        allocator.destroy(self);
     }
 
     /// Handy pass-thru to typed get(...) calls
@@ -534,40 +536,28 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
         // { indicates an object
         if (char == TOKEN_CURLY_BRACKET_OPEN) {
             var result = try parseObject(jsonString[index..jsonString.len], config, allocator, &index);
-            errdefer {
-                result.deinit(allocator);
-                allocator.destroy(result);
-            }
+            errdefer result.deinit(allocator);
             break :result result;
         }
 
         // [ indicates an array
         if (char == TOKEN_BRACKET_OPEN) {
             var result = try parseArray(jsonString[index..jsonString.len], config, allocator, &index);
-            errdefer {
-                result.deinit(allocator);
-                allocator.destroy(result);
-            }
+            errdefer result.deinit(allocator);
             break :result result;
         }
 
         // " indicates a string
         if (char == TOKEN_DOUBLE_QUOTE) {
             var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_DOUBLE_QUOTE, &index);
-            errdefer {
-                result.deinit(allocator);
-                allocator.destroy(result);
-            }
+            errdefer result.deinit(allocator);
             break :result result;
         }
 
         // ' indicates a string (json5)
         if (config.parserType == ParserType.json5 and char == TOKEN_SINGLE_QUOTE) {
             var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_SINGLE_QUOTE, &index);
-            errdefer {
-                result.deinit(allocator);
-                allocator.destroy(result);
-            }
+            errdefer result.deinit(allocator);
             break :result result;
         }
 
@@ -576,10 +566,7 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
             or isReservedWord(jsonString[index..jsonString.len], TOKEN_NAN)
             or isNumberOrPlusOrMinus(char)) {
             var result = try parseNumber(jsonString[index..jsonString.len], config, allocator, &index);
-            errdefer {
-                result.deinit(allocator);
-                allocator.destroy(result);
-            }
+            errdefer result.deinit(allocator);
             break :result result;
         }
 
@@ -602,10 +589,7 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
         return error.ParseValueError;
     };
 
-    errdefer {
-        result.deinit(allocator);
-        allocator.destroy(result);
-    }
+    errdefer result.deinit(allocator);
 
     outIndex.* += index;
     return result;
@@ -617,10 +601,7 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
 ///  starts after that point.
 fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
     const jsonObject = try allocator.create(JsonObject); 
-    errdefer {
-        jsonObject.deinit(allocator);
-        allocator.destroy(jsonObject);
-    }
+    errdefer jsonObject.deinit(allocator);
 
     jsonObject.map = std.StringArrayHashMap(*JsonValue).init(allocator);
 
@@ -648,38 +629,32 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         const key = key: {
             if (char == TOKEN_DOUBLE_QUOTE) {
                 var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_DOUBLE_QUOTE, &index);
-                errdefer allocator.destroy(result);
+                errdefer result.deinit(allocator);
                 break :key result;
             }
             if (config.parserType == ParserType.json5 and char == TOKEN_SINGLE_QUOTE) {
                 var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_SINGLE_QUOTE, &index);
-                errdefer allocator.destroy(result);
+                errdefer result.deinit(allocator);
                 break :key result;
             }
             if (config.parserType == ParserType.json5 and isStartOfEcmaScript51Identifier(jsonString[index..jsonString.len])) {
                 var result = try parseEcmaScript51Identifier(jsonString[index..jsonString.len], allocator, &index);
-                errdefer allocator.destroy(result);
+                errdefer result.deinit(allocator);
                 break :key result;
             }
             return error.ParseObjectError;
         };
-        errdefer {
-            key.deinit(allocator);
-            allocator.destroy(key);
-        }
+        errdefer key.deinit(allocator);
 
         index += try expect(jsonString[index..jsonString.len], config, TOKEN_COLON);
         const value = try parseValue(jsonString[index..jsonString.len], config, allocator, &index);
-        errdefer {
-            value.deinit(allocator);
-            allocator.destroy(value);
-        }
+        errdefer value.deinit(allocator);
 
         const keyString = try allocator.alloc(u8, key.string().len);
         errdefer allocator.free(keyString);
+
         std.mem.copy(u8, keyString, key.string());
         key.deinit(allocator);
-        allocator.destroy(key);
 
         try jsonObject.map.put(keyString, value);
     }
@@ -688,7 +663,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
     outIndex.* += index + 1;
 
     const jsonValue = try allocator.create(JsonValue);
-    errdefer allocator.destroy(jsonValue);
+    errdefer jsonValue.deinit(allocator);
 
     jsonValue.type = JsonType.object;
     jsonValue.value = .{ .object = jsonObject };
@@ -702,10 +677,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
 ///  starts after that point.
 fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
     const jsonArray = try allocator.create(JsonArray); 
-    errdefer {
-        jsonArray.deinit(allocator);
-        allocator.destroy(jsonArray);
-    }
+    errdefer jsonArray.deinit(allocator);
 
     jsonArray.array = std.ArrayList(*JsonValue).init(allocator);
 
@@ -726,10 +698,7 @@ fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator
         }
         wasLastComma = false;
         const jsonValue = try parseValue(jsonString[index..jsonString.len], config, allocator, &index);
-        errdefer {
-            jsonValue.deinit(allocator);
-            allocator.destroy(jsonValue);
-        }
+        errdefer jsonValue.deinit(allocator);
         try jsonArray.array.append(jsonValue);
     }
 
@@ -741,7 +710,7 @@ fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator
     outIndex.* += index + 1;
 
     const jsonValue = try allocator.create(JsonValue);
-    errdefer allocator.destroy(jsonValue);
+    errdefer jsonValue.deinit(allocator);
 
     jsonValue.type = JsonType.array;
     jsonValue.value = .{ .array = jsonArray };
@@ -773,7 +742,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
     if (i >= jsonString.len) return error.ParseStringError;
 
     const jsonValue = try allocator.create(JsonValue);
-    errdefer allocator.destroy(jsonValue);
+    errdefer jsonValue.deinit(allocator);
 
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
@@ -892,7 +861,8 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
 
     if (i > jsonString.len) @panic("Fail");
     const jsonValue = try allocator.create(JsonValue);
-    errdefer allocator.destroy(jsonValue);
+    errdefer jsonValue.deinit(allocator);
+
     jsonValue.type = switch (encodingType) {
         NumberEncoding.integer => JsonType.integer,
         NumberEncoding.float => JsonType.float,
@@ -906,6 +876,7 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, jsonString[startingDigitAt + 2..i], 16) },
         else => return error.ParseNumberError
     };
+
     outIndex.* += i;
     return jsonValue;
 }
@@ -940,7 +911,7 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
     if (index > jsonString.len) return error.ParseStringError;
 
     const jsonValue = try allocator.create(JsonValue);
-    errdefer allocator.destroy(jsonValue);
+    errdefer jsonValue.deinit(allocator);
 
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
@@ -1195,7 +1166,6 @@ fn expectParseNumberToParseNumber(number: anytype, text: []const u8, config: Par
         else => {
             if (!value.indestructible) {
                 value.deinit(allocator);
-                allocator.destroy(value);
             }
         }
     }
@@ -1213,14 +1183,12 @@ test "parse can parse a number" {
     try std.testing.expectEqual(value.integer(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     value = try parse("0.1", allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 0.1);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1233,7 +1201,6 @@ test "parse can parse a object" {
     try std.testing.expectEqual(value.type, JsonType.object);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1249,7 +1216,6 @@ test "parse can parse a array" {
     try std.testing.expectEqual(value.get(2).float(), 1.337);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1309,15 +1275,11 @@ test "RFC8259.4: parseObject can parse an empty object /1" {
     const text = "{}";
     var index: usize = 0;
     const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1329,15 +1291,11 @@ test "RFC8259.4: parseObject can parse an empty object /2" {
     const text = "{ }";
     var index: usize = 0;
     const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1350,15 +1308,11 @@ test "RFC8259.4: parseObject can parse an empty object /3" {
     const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
     var index: usize = 0;
     const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1393,7 +1347,6 @@ test "RFC8259.4: parseObject can parse a simple object /1" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1431,7 +1384,6 @@ test "RFC8259.4: parseObject can parse a simple object /2" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1469,15 +1421,11 @@ test "RFC8259.5: parseArray can parse an empty array /1" {
     const text = "[]";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1489,15 +1437,11 @@ test "RFC8259.5: parseArray can parse an empty array /2" {
     const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1510,15 +1454,11 @@ test "RFC8259.5: parseArray can parse an simple array /3" {
     const text = "[-1,-1.2,0,1,1.2,\"\",\"foo\",true,false,null,{},{\"foo\":\"bar\", \"baz\": {}}]";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 12);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1531,15 +1471,11 @@ test "RFC8259.5: parseArray can parse an simple array /4" {
     const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}0\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}true\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}false\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}null\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"bar\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"baz\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
-    errdefer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 12);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1567,7 +1503,6 @@ test "RFC8259.6: parseNumber can parse a integer /1" {
     try std.testing.expectEqual(value.integer(), 0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1583,7 +1518,6 @@ test "RFC8259.6: parseNumber can parse a integer /2" {
     try std.testing.expectEqual(value.integer(), 1);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1599,7 +1533,6 @@ test "RFC8259.6: parseNumber can parse a integer /3" {
     try std.testing.expectEqual(value.integer(), 1337);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1615,7 +1548,6 @@ test "RFC8259.6: parseNumber can parse a integer /4" {
     try std.testing.expectEqual(value.integer(), -1337);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1631,7 +1563,6 @@ test "RFC8259.6: parseNumber can parse a float /1" {
     try std.testing.expectEqual(value.float(), 1.0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1647,7 +1578,6 @@ test "RFC8259.6: parseNumber can parse a float /2" {
     try std.testing.expectEqual(value.float(), -1.0);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1663,7 +1593,6 @@ test "RFC8259.6: parseNumber can parse a float /3" {
     try std.testing.expectEqual(value.float(), 1337.0123456789);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1679,7 +1608,6 @@ test "RFC8259.6: parseNumber can parse a float /4" {
     try std.testing.expectEqual(value.float(), -1337.0123456789);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1695,7 +1623,6 @@ test "RFC8259.6: parseNumber can parse an exponent /1" {
     try std.testing.expectEqual(value.float(), 13e37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1711,7 +1638,6 @@ test "RFC8259.6: parseNumber can parse an exponent /2" {
     try std.testing.expectEqual(value.float(), 13E37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1727,7 +1653,6 @@ test "RFC8259.6: parseNumber can parse an exponent /3" {
     try std.testing.expectEqual(value.float(), 13E+37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1743,7 +1668,6 @@ test "RFC8259.6: parseNumber can parse an exponent /4" {
     try std.testing.expectEqual(value.float(), 13E-37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1759,7 +1683,6 @@ test "RFC8259.6: parseNumber can parse an exponent /5" {
     try std.testing.expectEqual(value.float(), -13e37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1775,7 +1698,6 @@ test "RFC8259.6: parseNumber can parse an exponent /6" {
     try std.testing.expectEqual(value.float(), -13E37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1791,7 +1713,6 @@ test "RFC8259.6: parseNumber can parse an exponent /7" {
     try std.testing.expectEqual(value.float(), -13E+37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1807,7 +1728,6 @@ test "RFC8259.6: parseNumber can parse an exponent /8" {
     try std.testing.expectEqual(value.float(), 13E-37);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1916,7 +1836,6 @@ test "JSON5.7 parseArray ignores multi-line comments" {
     try std.testing.expectEqual(value.get(5).get("six").integer(), 7);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1937,7 +1856,6 @@ test "JSON5.7 parseArray ignores single-line comments" {
     try std.testing.expectEqual(value.get(5).get("six").integer(), 7);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -1972,7 +1890,6 @@ test "JSON5.7: parseObject ignores multi-line comments" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2007,7 +1924,6 @@ test "JSON5.7: parseObject ignores single-line comments" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2023,7 +1939,6 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /1" {
     try std.testing.expect(std.mem.eql(u8, value.string(), ""));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2039,7 +1954,6 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /2" {
     try std.testing.expect(std.mem.eql(u8, value.string(), ""));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2055,7 +1969,6 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /1" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "some string"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2071,7 +1984,6 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /2" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2088,7 +2000,6 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /3" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\"string"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2105,7 +2016,6 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /4" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\\\"string"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2122,7 +2032,6 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /5" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "\"\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2139,7 +2048,6 @@ test "RFC8259.8.3: parseStringWithTerminal parsing results in equivalent strings
     try std.testing.expect(std.mem.eql(u8, value.string(), "a\u{5C}b"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2155,7 +2063,6 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /1" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "someIdentifier"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2171,7 +2078,6 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "_someIdentifier"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2187,7 +2093,6 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "$someIdentifier"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2203,7 +2108,6 @@ test "JSON5.3; parseEcmaScript51Identifier can parse simple identifier /2" {
     try std.testing.expect(std.mem.eql(u8, value.string(), "\u{005f}someIdentifier"));
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2238,7 +2142,6 @@ test "JSON5.3: parseObject can parse a simple object /1" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2273,7 +2176,6 @@ test "JSON5.3: parseObject can parse a simple object with trailing comma" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2294,7 +2196,6 @@ test "JSON5.4 parseArray can parse a simple array /1" {
     try std.testing.expectEqual(value.get(5).get("six").integer(), 7);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2394,7 +2295,6 @@ test "JSON5.7 parseArray ignores multi-line comments" {
     try std.testing.expectEqual(value.get(5).get("six").integer(), 7);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2415,7 +2315,6 @@ test "JSON5.7 parseArray ignores single-line comments" {
     try std.testing.expectEqual(value.get(5).get("six").integer(), 7);
 
     value.deinit(allocator);
-    allocator.destroy(value);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2450,7 +2349,6 @@ test "JSON5.7: parseObject ignores multi-line comments" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2485,7 +2383,6 @@ test "JSON5.7: parseObject ignores single-line comments" {
     try std.testing.expectEqual(jsonResult.get("key5").len(), 0);
 
     jsonResult.deinit(allocator);
-    allocator.destroy(jsonResult);
 
     try std.testing.expect(!gpa.deinit());
 }
@@ -2547,10 +2444,7 @@ test "README.md simple test" {
     bazObj.print(null);
     try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
-    defer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    defer value.deinit(allocator);
 }
 
 test "README.md simple test json5" {
@@ -2581,8 +2475,5 @@ test "README.md simple test json5" {
     bazObj.print(null);
     try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
-    defer {
-        value.deinit(allocator);
-        allocator.destroy(value);
-    }
+    defer value.deinit(allocator);
 }

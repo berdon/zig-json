@@ -49,10 +49,7 @@ const bazObj = value.get("foo").get(4);
 bazObj.print(null);
 try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
-defer {
-    value.deinit(allocator);
-    allocator.destroy(value);
-}
+defer value.deinit(allocator);
 ```
 
 ```bash
@@ -95,10 +92,7 @@ const bazObj = value.get("foo").get(4);
 bazObj.print(null);
 try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
-defer {
-    value.deinit(allocator);
-    allocator.destroy(value);
-}
+defer value.deinit(allocator);
 ```
 
 ```bash
