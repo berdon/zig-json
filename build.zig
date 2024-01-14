@@ -4,6 +4,8 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    _ = b.addModule("zig-json", .{ .source_file = .{ .path = "src/main.zig" } });
+
     _ = b.addStaticLibrary(.{
         .name = "zig-json",
         .root_source_file = .{ .path = "src/main.zig" },
