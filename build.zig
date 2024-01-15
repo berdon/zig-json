@@ -4,9 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("zig-json", .{ .source_file = .{ .path = "src/main.zig" } });
+    const module = b.addModule("zig-json", .{ .source_file = .{ .path = "src/main.zig" } });
+    defer _ = module;
 
-    _ = b.addStaticLibrary(.{
+    const lib = b.addStaticLibrary(.{
         .name = "zig-json",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
@@ -22,4 +23,6 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
+
+    b.installArtifact(lib);
 }
