@@ -40,17 +40,17 @@ exe.addPackagePath("json", "deps/zig-json/src/main.zig");
 5. Add the module to your artefact.
 
 ```zig
-    // build.zig
-    //   -> fn build
-    //      b: *std.Build
+// build.zig
+//   -> fn build
+//      b: *std.Build
 
-    const zigJsonDep = b.dependency("zigjson", .{}); // "zigjson"-name declared in ".dependencies"
-    
-    // ...
+const zigJsonDep = b.dependency("zigjson", .{}); // "zigjson"-name declared in ".dependencies"
 
-    exe.addModule("json" /* is renameble; repressentation in code */, zigJsonDep.module(/* must be */ "zig-json"));
-    // usage:
-    //   const json = @import("json");
+// ...
+
+exe.addModule("json" /* is renameble; repressentation in code */, zigJsonDep.module(/* must be */ "zig-json"));
+// usage:
+//   const json = @import("json");
 ```
 
 # Usage
