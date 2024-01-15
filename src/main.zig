@@ -193,7 +193,7 @@ const JsonObject = struct {
     pub fn print(self: *JsonObject, indent: ?usize) void {
         std.debug.print("{{\n", .{});
         var iv = if (indent) |v| v + 2 else 2;
-        for (self.map.keys()) |key, index| {
+        for (self.map.keys(), 0..) |key, index| {
             var i: usize = 0;
             while (i < iv): (i += 1) {
                 std.debug.print(" ", .{});
@@ -274,7 +274,7 @@ const JsonArray = struct {
     pub fn print(self: *JsonArray, indent: ?usize) void {
         std.debug.print("[\n", .{});
         var iv = if (indent) |v| v + 2 else 2;
-        for (self.array.items) |item, index| {
+        for (self.array.items, 0..) |item, index| {
             var i: usize = 0;
             while (i < iv): (i += 1) {
                 std.debug.print(" ", .{});
@@ -747,7 +747,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
 
-    for (characters.items) |char, index| {
+    for (characters.items, 0..) |char, index| {
         copy[index] = char;
     }
     characters.deinit();
@@ -916,7 +916,7 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
 
-    for (characters.items) |char, i| {
+    for (characters.items, 0..) |char, i| {
         copy[i] = char;
     }
     characters.deinit();
