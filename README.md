@@ -48,7 +48,14 @@ const zigJsonDep = b.dependency("zigjson", .{}); // "zigjson"-name declared in "
 
 // ...
 
-exe.addModule("json" /* is renameble; repressentation in code */, zigJsonDep.module(/* must be */ "zig-json"));
+exe.addModule(
+    "json", // is renameble; repressentation in code
+    zigJsonDep.module(
+        // must be
+        "zig-json"
+    )
+);
+
 // usage:
 //   const json = @import("json");
 ```
