@@ -653,7 +653,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         const keyString = try allocator.alloc(u8, key.string().len);
         errdefer allocator.free(keyString);
 
-        std.mem.copy(u8, keyString, key.string());
+        std.mem.copyForwards(u8, keyString, key.string());
         key.deinit(allocator);
 
         try jsonObject.map.put(keyString, value);
@@ -1170,7 +1170,8 @@ fn expectParseNumberToParseNumber(number: anytype, text: []const u8, config: Par
         }
     }
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 // Unit Tests
@@ -1190,7 +1191,8 @@ test "parse can parse a number" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "parse can parse a object" {
@@ -1202,7 +1204,8 @@ test "parse can parse a object" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "parse can parse a array" {
@@ -1217,7 +1220,8 @@ test "parse can parse a array" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.3: parseValue can parse true" {
@@ -1233,7 +1237,8 @@ test "RFC8259.3: parseValue can parse true" {
     // Note: true, false, and null are constant JsonValues
     // and should not be destroyed
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.3: parseValue can parse false" {
@@ -1249,7 +1254,8 @@ test "RFC8259.3: parseValue can parse false" {
     // Note: true, false, and null are constant JsonValues
     // and should not be destroyed
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.3: parseValue can parse null" {
@@ -1265,7 +1271,8 @@ test "RFC8259.3: parseValue can parse null" {
     // Note: true, false, and null are constant JsonValues
     // and should not be destroyed
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject can parse an empty object /1" {
@@ -1281,7 +1288,8 @@ test "RFC8259.4: parseObject can parse an empty object /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject can parse an empty object /2" {
@@ -1297,7 +1305,8 @@ test "RFC8259.4: parseObject can parse an empty object /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject can parse an empty object /3" {
@@ -1314,7 +1323,8 @@ test "RFC8259.4: parseObject can parse an empty object /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject can parse a simple object /1" {
@@ -1348,7 +1358,8 @@ test "RFC8259.4: parseObject can parse a simple object /1" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject can parse a simple object /2" {
@@ -1385,7 +1396,8 @@ test "RFC8259.4: parseObject can parse a simple object /2" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject returns UnexpectedTokenException on trailing comma" {
@@ -1398,7 +1410,8 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on trailing comma"
     const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\", {},}", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.4: parseObject returns UnexpectedTokenException on missing comma" {
@@ -1411,7 +1424,8 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on missing comma" 
     const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\" {}}", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.5: parseArray can parse an empty array /1" {
@@ -1427,7 +1441,8 @@ test "RFC8259.5: parseArray can parse an empty array /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.5: parseArray can parse an empty array /2" {
@@ -1443,7 +1458,8 @@ test "RFC8259.5: parseArray can parse an empty array /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.5: parseArray can parse an simple array /3" {
@@ -1460,7 +1476,8 @@ test "RFC8259.5: parseArray can parse an simple array /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.5: parseArray can parse an simple array /4" {
@@ -1477,7 +1494,8 @@ test "RFC8259.5: parseArray can parse an simple array /4" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.5: parseArray returns UnexpectedTokenError on trailing comma" {
@@ -1489,7 +1507,8 @@ test "RFC8259.5: parseArray returns UnexpectedTokenError on trailing comma" {
     const value = parseArray(text, CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.UnexpectedTokenError, value);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a integer /1" {
@@ -1504,7 +1523,8 @@ test "RFC8259.6: parseNumber can parse a integer /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a integer /2" {
@@ -1519,7 +1539,8 @@ test "RFC8259.6: parseNumber can parse a integer /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a integer /3" {
@@ -1534,7 +1555,8 @@ test "RFC8259.6: parseNumber can parse a integer /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a integer /4" {
@@ -1549,7 +1571,8 @@ test "RFC8259.6: parseNumber can parse a integer /4" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a float /1" {
@@ -1564,7 +1587,8 @@ test "RFC8259.6: parseNumber can parse a float /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a float /2" {
@@ -1579,7 +1603,8 @@ test "RFC8259.6: parseNumber can parse a float /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a float /3" {
@@ -1594,7 +1619,8 @@ test "RFC8259.6: parseNumber can parse a float /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse a float /4" {
@@ -1609,7 +1635,8 @@ test "RFC8259.6: parseNumber can parse a float /4" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /1" {
@@ -1624,7 +1651,8 @@ test "RFC8259.6: parseNumber can parse an exponent /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /2" {
@@ -1639,7 +1667,8 @@ test "RFC8259.6: parseNumber can parse an exponent /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /3" {
@@ -1654,7 +1683,8 @@ test "RFC8259.6: parseNumber can parse an exponent /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /4" {
@@ -1669,7 +1699,8 @@ test "RFC8259.6: parseNumber can parse an exponent /4" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /5" {
@@ -1684,7 +1715,8 @@ test "RFC8259.6: parseNumber can parse an exponent /5" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /6" {
@@ -1699,7 +1731,8 @@ test "RFC8259.6: parseNumber can parse an exponent /6" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /7" {
@@ -1714,7 +1747,8 @@ test "RFC8259.6: parseNumber can parse an exponent /7" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber can parse an exponent /8" {
@@ -1729,7 +1763,8 @@ test "RFC8259.6: parseNumber can parse an exponent /8" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber fails on a repeating 0" {
@@ -1741,7 +1776,8 @@ test "RFC8259.6: parseNumber fails on a repeating 0" {
     const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.ParseNumberError, value);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /1" {
@@ -1753,7 +1789,8 @@ test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /1" {
     const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.ParseNumberError, value);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /2" {
@@ -1765,7 +1802,8 @@ test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /2" {
     const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.ParseNumberError, value);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6: parseNumber fails on number starting with decimal point" {
@@ -1777,7 +1815,8 @@ test "RFC8259.6: parseNumber fails on number starting with decimal point" {
     const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.ParseNumberError, value);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.6 parseNumber ignores multi-line comments /1" {
@@ -1837,7 +1876,8 @@ test "JSON5.7 parseArray ignores multi-line comments /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7 parseArray ignores single-line comments /2" {
@@ -1857,7 +1897,8 @@ test "JSON5.7 parseArray ignores single-line comments /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7: parseObject ignores multi-line comments /1" {
@@ -1891,7 +1932,8 @@ test "JSON5.7: parseObject ignores multi-line comments /1" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7: parseObject ignores single-line comments /2" {
@@ -1925,7 +1967,8 @@ test "JSON5.7: parseObject ignores single-line comments /2" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse an empty string /1" {
@@ -1940,7 +1983,8 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse an empty string /2" {
@@ -1955,7 +1999,8 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse a simple string /1" {
@@ -1970,7 +2015,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse a simple string /2" {
@@ -1985,7 +2031,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse a simple string /3" {
@@ -2001,7 +2048,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse a simple string /4" {
@@ -2017,7 +2065,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /4" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.7: parseStringWithTerminal can parse a simple string /5" {
@@ -2033,7 +2082,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /5" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "RFC8259.8.3: parseStringWithTerminal parsing results in equivalent strings" {
@@ -2049,7 +2099,8 @@ test "RFC8259.8.3: parseStringWithTerminal parsing results in equivalent strings
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5; parseEcmaScript51Identifier can parse simple identifier /1" {
@@ -2064,7 +2115,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
@@ -2079,7 +2131,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5; parseEcmaScript51Identifier can parse simple identifier /3" {
@@ -2094,7 +2147,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /3" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.3; parseEcmaScript51Identifier can parse simple identifier /2" {
@@ -2109,7 +2163,8 @@ test "JSON5.3; parseEcmaScript51Identifier can parse simple identifier /2" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.3: parseObject can parse a simple object /1" {
@@ -2143,7 +2198,8 @@ test "JSON5.3: parseObject can parse a simple object /1" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.3: parseObject can parse a simple object with trailing comma" {
@@ -2177,7 +2233,8 @@ test "JSON5.3: parseObject can parse a simple object with trailing comma" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.4 parseArray can parse a simple array /1" {
@@ -2197,7 +2254,8 @@ test "JSON5.4 parseArray can parse a simple array /1" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.6 parseNumber can parse an integer" {
@@ -2276,7 +2334,8 @@ test "JSON5.6 parseNumber can parse nan" {
     try std.testing.expectEqual(value, &JSON_NEGATIVE_NAN);
     try std.testing.expect(std.math.isNan(value.float()));
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7 parseArray ignores multi-line comments" {
@@ -2296,7 +2355,8 @@ test "JSON5.7 parseArray ignores multi-line comments" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7 parseArray ignores single-line comments" {
@@ -2316,7 +2376,8 @@ test "JSON5.7 parseArray ignores single-line comments" {
 
     value.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7: parseObject ignores multi-line comments" {
@@ -2350,7 +2411,8 @@ test "JSON5.7: parseObject ignores multi-line comments" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.7: parseObject ignores single-line comments" {
@@ -2384,7 +2446,8 @@ test "JSON5.7: parseObject ignores single-line comments" {
 
     jsonResult.deinit(allocator);
 
-    try std.testing.expect(!gpa.deinit());
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
 }
 
 test "JSON5.4 parseNumber ignores multi-line comments" {
@@ -2423,7 +2486,8 @@ test "JSON5.4 parseNumber ignores single-line comments" {
 
 test "README.md simple test" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(!gpa.deinit());
+    const Check = std.heap.Check;
+    defer std.debug.assert(gpa.deinit() == Check.ok);
     const allocator = gpa.allocator();
 
     const value = try parse(
@@ -2449,7 +2513,8 @@ test "README.md simple test" {
 
 test "README.md simple test json5" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(!gpa.deinit());
+    const Check = std.heap.Check;
+    defer std.debug.assert(gpa.deinit() == Check.ok);
     const allocator = gpa.allocator();
 
     const value = try parseJson5(
@@ -2477,3 +2542,6 @@ test "README.md simple test json5" {
 
     defer value.deinit(allocator);
 }
+
+// Check whether tests are executed.
+//test{try std.testing.expect(false);}
