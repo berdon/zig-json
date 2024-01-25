@@ -6,13 +6,13 @@ _Note: The simple and usable part is a WIP :)_
 
 # Importing
 
-## Lagacy
+## Legacy
 
 1. Clone the repo
 
 ```bash
 mkdir deps
-git clone --depth 1 git@github.com:Klebestreifen/zig-json.git ./deps/zig-json
+git clone --depth 1 git@github.com:berdon/zig-json.git ./deps/zig-json
 ```
 
 2. Update build.zig
