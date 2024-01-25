@@ -193,7 +193,7 @@ const JsonObject = struct {
     pub fn print(self: *JsonObject, indent: ?usize) void {
         std.debug.print("{{\n", .{});
         var iv = if (indent) |v| v + 2 else 2;
-        for (self.map.keys()) |key, index| {
+        for (self.map.keys(), 0..) |key, index| {
             var i: usize = 0;
             while (i < iv): (i += 1) {
                 std.debug.print(" ", .{});
@@ -274,7 +274,7 @@ const JsonArray = struct {
     pub fn print(self: *JsonArray, indent: ?usize) void {
         std.debug.print("[\n", .{});
         var iv = if (indent) |v| v + 2 else 2;
-        for (self.array.items) |item, index| {
+        for (self.array.items, 0..) |item, index| {
             var i: usize = 0;
             while (i < iv): (i += 1) {
                 std.debug.print(" ", .{});
@@ -747,7 +747,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
 
-    for (characters.items) |char, index| {
+    for (characters.items, 0..) |char, index| {
         copy[index] = char;
     }
     characters.deinit();
@@ -764,7 +764,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
 /// Returns the index of the next character to read
 fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
     var encodingType = NumberEncoding.integer;
-    var start = skipWhiteSpaces(jsonString, config);
+    const start = skipWhiteSpaces(jsonString, config);
     var i: usize = start;
     var startingDigitAt: usize = start;
     var polarity: isize = 1;
@@ -916,7 +916,7 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
     const copy = try allocator.alloc(u8, characters.items.len);
     errdefer allocator.free(copy);
 
-    for (characters.items) |char, i| {
+    for (characters.items, 0..) |char, i| {
         copy[i] = char;
     }
     characters.deinit();
@@ -932,7 +932,7 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
 /// Expects the next significant character be token, skipping over all leading and trailing
 /// insignificant whitespace, or returns UnexpectedTokenError.
 fn expect(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
-    var index = skipWhiteSpaces(jsonString, config);
+    const index = skipWhiteSpaces(jsonString, config);
     if (jsonString[index] != token) {
         debug("Expected {c} found {c}", .{token, jsonString[index]});
         return error.UnexpectedTokenError;
@@ -952,7 +952,7 @@ fn expectOnly(jsonString: []const u8, token: u8) ParseErrors!usize {
 /// Expects the next significant character be token, skipping over all leading insignificant
 /// whitespace, or returns UnexpectedTokenError.
 fn expectUpTo(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
-    var index = skipWhiteSpaces(jsonString, config);
+    const index = skipWhiteSpaces(jsonString, config);
     if (jsonString[index] != token) {
         debug("Expected {c} found {c}", .{token, jsonString[index]});
         return error.UnexpectedTokenError;
@@ -1395,7 +1395,7 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on trailing comma"
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
     var index: usize = 0;
-    var jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\", {},}", CONFIG_RFC8259, allocator, &index);
+    const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\", {},}", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
     try std.testing.expect(!gpa.deinit());
@@ -1408,7 +1408,7 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on missing comma" 
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
     var index: usize = 0;
-    var jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\" {}}", CONFIG_RFC8259, allocator, &index);
+    const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\" {}}", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
     try std.testing.expect(!gpa.deinit());
@@ -1820,7 +1820,7 @@ test "RFC8259.6 parseNumber fails on single-line comments /1" {
     try expectParseNumberToParseNumber(error.ParseNumberError, "// comment\n+NaN\n// comment", CONFIG_RFC8259);
 }
 
-test "JSON5.7 parseArray ignores multi-line comments" {
+test "JSON5.7 parseArray ignores multi-line comments /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -1840,7 +1840,7 @@ test "JSON5.7 parseArray ignores multi-line comments" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "JSON5.7 parseArray ignores single-line comments" {
+test "JSON5.7 parseArray ignores single-line comments /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -1860,7 +1860,7 @@ test "JSON5.7 parseArray ignores single-line comments" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "JSON5.7: parseObject ignores multi-line comments" {
+test "JSON5.7: parseObject ignores multi-line comments /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -1894,7 +1894,7 @@ test "JSON5.7: parseObject ignores multi-line comments" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "JSON5.7: parseObject ignores single-line comments" {
+test "JSON5.7: parseObject ignores single-line comments /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
@@ -2082,7 +2082,7 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
     try std.testing.expect(!gpa.deinit());
 }
 
-test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
+test "JSON5; parseEcmaScript51Identifier can parse simple identifier /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 

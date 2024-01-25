@@ -6,6 +6,8 @@ _Note: The simple and usable part is a WIP :)_
 
 # Importing
 
+## Legacy
+
 1. Clone the repo
 
 ```bash
@@ -19,6 +21,44 @@ git clone --depth 1 git@github.com:berdon/zig-json.git ./deps/zig-json
 exe.addPackagePath("json", "deps/zig-json/src/main.zig");
 ```
 
+## Using Zig Packages
+
+1. Add the dependency to your `build.zig.zon`.
+
+```zig
+.dependencies = .{
+    .zigjson = .{
+        .url = "https://codeload.github.com/berdon/zig-json/tar.gz/{FULL_COMMIT_HASH}",
+        .hash = "12##################################################################",
+    }
+},
+```
+
+2. Select a commit you want to use and replace it in the URL
+3. Try to build. You should get a `hash mismatch` error.
+4. Replace the hash with the correct one shown in the error message.
+5. Add the module to your artefact.
+
+```zig
+// build.zig
+//   -> fn build
+//      b: *std.Build
+
+const zigJsonDep = b.dependency("zigjson", .{}); // "zigjson"-name declared in ".dependencies"
+
+// ...
+
+exe.addModule(
+    "json", // is renameble; repressentation in code
+    zigJsonDep.module(
+        // must be
+        "zig-json"
+    )
+);
+
+// usage:
+//   const json = @import("json");
+```
 
 # Usage
 
