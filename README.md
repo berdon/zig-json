@@ -6,13 +6,13 @@ _Note: The simple and usable part is a WIP :)_
 
 # Importing
 
-## Lagacy
+## Legacy
 
 1. Clone the repo
 
 ```bash
 mkdir deps
-git clone --depth 1 git@github.com:Klebestreifen/zig-json.git ./deps/zig-json
+git clone --depth 1 git@github.com:berdon/zig-json.git ./deps/zig-json
 ```
 
 2. Update build.zig
@@ -28,7 +28,7 @@ exe.addPackagePath("json", "deps/zig-json/src/main.zig");
 ```zig
 .dependencies = .{
     .zigjson = .{
-        .url = "https://codeload.github.com/Klebestreifen/zig-json/tar.gz/{FULL_COMMIT_HASH}",
+        .url = "https://codeload.github.com/berdon/zig-json/tar.gz/{FULL_COMMIT_HASH}",
         .hash = "12##################################################################",
     }
 },
@@ -48,7 +48,14 @@ const zigJsonDep = b.dependency("zigjson", .{}); // "zigjson"-name declared in "
 
 // ...
 
-exe.addModule("json" /* is renameble; repressentation in code */, zigJsonDep.module(/* must be */ "zig-json"));
+exe.addModule(
+    "json", // is renameble; repressentation in code
+    zigJsonDep.module(
+        // must be
+        "zig-json"
+    )
+);
+
 // usage:
 //   const json = @import("json");
 ```
