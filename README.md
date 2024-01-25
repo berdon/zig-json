@@ -28,7 +28,7 @@ exe.addPackagePath("json", "deps/zig-json/src/main.zig");
 ```zig
 .dependencies = .{
     .zigjson = .{
-        .url = "https://codeload.github.com/Klebestreifen/zig-json/tar.gz/{FULL_COMMIT_HASH}",
+        .url = "https://codeload.github.com/berdon/zig-json/tar.gz/{FULL_COMMIT_HASH}",
         .hash = "12##################################################################",
     }
 },
