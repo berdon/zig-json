@@ -119,7 +119,7 @@ pub const JsonType = enum { object, array, string, integer, float, boolean, nil 
 const NumberEncoding = enum { integer, float, exponent, hex };
 
 /// Abstraction for JSON objects
-const JsonObject = struct {
+pub const JsonObject = struct {
     /// Underlying key/pair mapping
     map: std.StringArrayHashMap(*JsonValue),
 
@@ -199,7 +199,7 @@ const JsonObject = struct {
 };
 
 /// Abstraction for JSON arrays
-const JsonArray = struct {
+pub const JsonArray = struct {
     /// The underlying list of *JsonValue's
     array: std.ArrayList(*JsonValue),
 
@@ -276,7 +276,7 @@ const JsonArray = struct {
 };
 
 /// Abstraction for all JSON values
-const JsonValue = struct {
+pub const JsonValue = struct {
     /// The JSON value type
     type: JsonType,
 
