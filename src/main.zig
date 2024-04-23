@@ -1,5 +1,4 @@
 ///! Simple JSON parsing library with a focus on a simple, usable API.
-
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -88,7 +87,7 @@ const TOKEN_ZERO_WIDTH_NON_JOINER = 0x200C;
 const TOKEN_ZERO_WIDTH_JOINER = 0x200D;
 
 /// Parser specific errors
-pub const ParseError = error {
+pub const ParseError = error{
     /// Returned when failing to determine the type of value to parse
     ParseValueError,
     /// Returned when failing to parse an object
@@ -108,34 +107,16 @@ pub const ParseError = error {
 pub const ParseErrors = ParseError || Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError;
 
 /// Allows callers to configure which parser style to use.
-pub const ParserConfig = struct {
-    parserType: ParserType = ParserType.rfc8259
-};
+pub const ParserConfig = struct { parserType: ParserType = ParserType.rfc8259 };
 
 /// Enumerator for the JSON parser type.
-pub const ParserType = enum {
-    rfc8259,
-    json5
-};
+pub const ParserType = enum { rfc8259, json5 };
 
 /// The possible types of JSON values
-pub const JsonType = enum {
-    object,
-    array,
-    string,
-    integer,
-    float,
-    boolean,
-    nil
-};
+pub const JsonType = enum { object, array, string, integer, float, boolean, nil };
 
 /// The type of encoding used for a JSON number
-const NumberEncoding = enum {
-    integer,
-    float,
-    exponent,
-    hex
-};
+const NumberEncoding = enum { integer, float, exponent, hex };
 
 /// Abstraction for JSON objects
 const JsonObject = struct {
@@ -166,7 +147,7 @@ const JsonObject = struct {
     pub fn len(self: *JsonObject) usize {
         return self.map.count();
     }
-    
+
     /// Whether the map contains the key or not
     pub fn contains(self: *JsonObject, key: []const u8) bool {
         return self.map.contains(key);
@@ -195,7 +176,7 @@ const JsonObject = struct {
         var iv = if (indent) |v| v + 2 else 2;
         for (self.map.keys(), 0..) |key, index| {
             var i: usize = 0;
-            while (i < iv): (i += 1) {
+            while (i < iv) : (i += 1) {
                 std.debug.print(" ", .{});
             }
             std.debug.print("\"{s}\": ", .{key});
@@ -210,7 +191,7 @@ const JsonObject = struct {
         iv -= 2;
         std.debug.print("\n", .{});
         var i: usize = 0;
-        while (i < iv): (i += 1) {
+        while (i < iv) : (i += 1) {
             std.debug.print(" ", .{});
         }
         std.debug.print("}}\n", .{});
@@ -276,7 +257,7 @@ const JsonArray = struct {
         var iv = if (indent) |v| v + 2 else 2;
         for (self.array.items, 0..) |item, index| {
             var i: usize = 0;
-            while (i < iv): (i += 1) {
+            while (i < iv) : (i += 1) {
                 std.debug.print(" ", .{});
             }
             item.print(iv);
@@ -287,7 +268,7 @@ const JsonArray = struct {
         std.debug.print("\n", .{});
         iv -= 2;
         var i: usize = 0;
-        while (i < iv): (i += 1) {
+        while (i < iv) : (i += 1) {
             std.debug.print(" ", .{});
         }
         std.debug.print("]\n", .{});
@@ -300,14 +281,7 @@ const JsonValue = struct {
     type: JsonType,
 
     /// The JSON value
-    value: ?union {
-        integer: i64,
-        float: f64,
-        array: *JsonArray,
-        string: []const u8,
-        object: *JsonObject,
-        boolean: bool
-    },
+    value: ?union { integer: i64, float: f64, array: *JsonArray, string: []const u8, object: *JsonObject, boolean: bool },
 
     /// A pointer for the string value if we don't use a slice from the parsed
     /// string. Presently we're always using this but we can step back for non
@@ -332,7 +306,7 @@ const JsonValue = struct {
             }
             if (self.type == JsonType.string) {
                 if (self.stringPtr) |stringPtr|
-                allocator.free(stringPtr);
+                    allocator.free(stringPtr);
             }
         }
 
@@ -349,7 +323,7 @@ const JsonValue = struct {
             // Figure out a better way to do this
             JsonType.object => if (@TypeOf(index) != usize and @TypeOf(index) != comptime_int) self.value.?.object.get(index) else @panic("Invalid key type"),
             JsonType.array => if (@TypeOf(index) == usize or @TypeOf(index) == comptime_int) self.value.?.array.get(index) else @panic("Invalid key type"),
-            else => @panic("JsonType doesn't support get()")
+            else => @panic("JsonType doesn't support get()"),
         };
     }
 
@@ -364,44 +338,44 @@ const JsonValue = struct {
             JsonType.object => self.value.?.object.len(),
             JsonType.array => self.value.?.array.len(),
             JsonType.string => self.value.?.string.len,
-            else => @panic("JsonType doesn't support len()")
+            else => @panic("JsonType doesn't support len()"),
         };
     }
 
     /// Returns the string value or panics
     pub fn string(self: *JsonValue) []const u8 {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.string ) self.value.?.string else @panic("Not a string");
+        return if (self.type == JsonType.string) self.value.?.string else @panic("Not a string");
     }
 
     /// Returns the object value or panics
     pub fn object(self: *JsonValue) *JsonObject {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.object ) self.value.?.object else @panic("Not an object");
+        return if (self.type == JsonType.object) self.value.?.object else @panic("Not an object");
     }
 
     /// Returns the integer value or panics
     pub fn integer(self: *JsonValue) i64 {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.integer ) self.value.?.integer else @panic("Not an number");
+        return if (self.type == JsonType.integer) self.value.?.integer else @panic("Not an number");
     }
 
     /// Returns the float value or panics
     pub fn float(self: *JsonValue) f64 {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.float ) self.value.?.float else @panic("Not an float");
+        return if (self.type == JsonType.float) self.value.?.float else @panic("Not an float");
     }
 
     /// Returns the array value or panics
     pub fn array(self: *JsonValue) *JsonArray {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.array ) self.value.?.array else @panic("Not an array");
+        return if (self.type == JsonType.array) self.value.?.array else @panic("Not an array");
     }
 
     /// Returns the array value or panics
     pub fn boolean(self: *JsonValue) bool {
         if (self.value == null) @panic("Value is null");
-        return if (self.type == JsonType.boolean ) self.value.?.boolean else @panic("Not a boolean");
+        return if (self.type == JsonType.boolean) self.value.?.boolean else @panic("Not a boolean");
     }
 
     /// Returns the string value or null
@@ -448,64 +422,29 @@ const JsonValue = struct {
     }
 };
 
-pub const CONFIG_RFC8259 = ParserConfig { .parserType = ParserType.rfc8259 };
-pub const CONFIG_JSON5 = ParserConfig { .parserType = ParserType.json5 };
+pub const CONFIG_RFC8259 = ParserConfig{ .parserType = ParserType.rfc8259 };
+pub const CONFIG_JSON5 = ParserConfig{ .parserType = ParserType.json5 };
 
 /// "Constant" for JSON true value
-var JSON_TRUE = JsonValue {
-    .type = JsonType.boolean,
-    .value = .{ .boolean = true },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_TRUE = JsonValue{ .type = JsonType.boolean, .value = .{ .boolean = true }, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON false value
-var JSON_FALSE = JsonValue {
-    .type = JsonType.boolean,
-    .value = .{ .boolean = false },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_FALSE = JsonValue{ .type = JsonType.boolean, .value = .{ .boolean = false }, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON null value
-var JSON_NULL = JsonValue {
-    .type = JsonType.nil,
-    .value = null,
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_NULL = JsonValue{ .type = JsonType.nil, .value = null, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON positive infinity
-var JSON_POSITIVE_INFINITY = JsonValue {
-    .type = JsonType.float,
-    .value = .{ .float = std.math.inf(f64) },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_POSITIVE_INFINITY = JsonValue{ .type = JsonType.float, .value = .{ .float = std.math.inf(f64) }, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON negative infinity
-var JSON_NEGATIVE_INFINITY = JsonValue {
-    .type = JsonType.float,
-    .value = .{ .float = -std.math.inf(f64) },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_NEGATIVE_INFINITY = JsonValue{ .type = JsonType.float, .value = .{ .float = -std.math.inf(f64) }, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON positive NaN
-var JSON_POSITIVE_NAN = JsonValue {
-    .type = JsonType.float,
-    .value = .{ .float = std.math.nan(f64) },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_POSITIVE_NAN = JsonValue{ .type = JsonType.float, .value = .{ .float = std.math.nan(f64) }, .indestructible = true, .stringPtr = null };
 
 /// "Constant" for JSON negative NaN
-var JSON_NEGATIVE_NAN = JsonValue {
-    .type = JsonType.float,
-    .value = .{ .float = -std.math.nan(f64) },
-    .indestructible = true,
-    .stringPtr = null
-};
+var JSON_NEGATIVE_NAN = JsonValue{ .type = JsonType.float, .value = .{ .float = -std.math.nan(f64) }, .indestructible = true, .stringPtr = null };
 
 /// Parse a JSON5 string using the provided allocator
 pub fn parse(jsonString: []const u8, allocator: Allocator) !*JsonValue {
@@ -562,9 +501,7 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
         }
 
         // 0-9|- indicates a number
-        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_INFINITY)
-            or isReservedWord(jsonString[index..jsonString.len], TOKEN_NAN)
-            or isNumberOrPlusOrMinus(char)) {
+        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_INFINITY) or isReservedWord(jsonString[index..jsonString.len], TOKEN_NAN) or isNumberOrPlusOrMinus(char)) {
             var result = try parseNumber(jsonString[index..jsonString.len], config, allocator, &index);
             errdefer result.deinit(allocator);
             break :result result;
@@ -600,7 +537,7 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
 /// Note: parseObject _assumes_ the leading { has been stripped and jsonString
 ///  starts after that point.
 fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
-    const jsonObject = try allocator.create(JsonObject); 
+    const jsonObject = try allocator.create(JsonObject);
     errdefer jsonObject.deinit(allocator);
 
     jsonObject.map = std.StringArrayHashMap(*JsonValue).init(allocator);
@@ -676,7 +613,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
 /// Note: parseArray _assumes_ the leading [ has been stripped and jsonString
 ///  starts after that point.
 fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
-    const jsonArray = try allocator.create(JsonArray); 
+    const jsonArray = try allocator.create(JsonArray);
     errdefer jsonArray.deinit(allocator);
 
     jsonArray.array = std.ArrayList(*JsonValue).init(allocator);
@@ -724,7 +661,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
     var i = try expectUpTo(jsonString, config, terminal);
     var slashCount: usize = 0;
     var characters = std.ArrayList(u8).init(allocator);
-    while (i < jsonString.len and (jsonString[i] != terminal or slashCount % 2 == 1)): (i += 1) {
+    while (i < jsonString.len and (jsonString[i] != terminal or slashCount % 2 == 1)) : (i += 1) {
         // Track escaping
         if (jsonString[i] == TOKEN_REVERSE_SOLIDUS) {
             slashCount += 1;
@@ -732,8 +669,7 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
             if (slashCount % 2 == 0) {
                 try characters.append(jsonString[i]);
             }
-        }
-        else {
+        } else {
             slashCount = 0;
             try characters.append(jsonString[i]);
         }
@@ -775,8 +711,7 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
     }
 
     // First character can be a minus or number
-    if (config.parserType == ParserType.json5 and isPlusOrMinus(jsonString[i])
-            or config.parserType == ParserType.rfc8259 and jsonString[i] == TOKEN_MINUS) {
+    if (config.parserType == ParserType.json5 and isPlusOrMinus(jsonString[i]) or config.parserType == ParserType.rfc8259 and jsonString[i] == TOKEN_MINUS) {
         polarity = if (jsonString[i] == TOKEN_MINUS) -1 else 1;
         startingDigitAt += 1;
         i += 1;
@@ -810,11 +745,9 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
                 i += 1;
             }
         }
-    }
-    else if (isNumber(jsonString[i])) {
+    } else if (isNumber(jsonString[i])) {
         i += 1;
-    }
-    else if (jsonString[i] == TOKEN_PERIOD) {
+    } else if (jsonString[i] == TOKEN_PERIOD) {
         if (config.parserType == ParserType.rfc8259) {
             debug("Invalid number; RFS8259 doesn't support floating point numbers starting with a decimal point", .{});
             return error.ParseNumberError;
@@ -826,28 +759,23 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
             debug("Invalid number; decimal value must follow decimal point", .{});
             return error.ParseNumberError;
         }
-    }
-    else {
-        debug("Invalid number; invalid starting character, '{s}'", .{jsonString[start..i + 1]});
+    } else {
+        debug("Invalid number; invalid starting character, '{s}'", .{jsonString[start .. i + 1]});
         return error.ParseNumberError;
     }
 
     // Walk through each character
-    while (i < jsonString.len and (
-        (encodingType != NumberEncoding.hex and isNumber(jsonString[i]))
-        or (encodingType == NumberEncoding.hex and isHexDigit(jsonString[i])))
-    ): (i += 1) { }
+    while (i < jsonString.len and ((encodingType != NumberEncoding.hex and isNumber(jsonString[i])) or (encodingType == NumberEncoding.hex and isHexDigit(jsonString[i])))) : (i += 1) {}
 
     // Handle decimal numbers
     if (i < jsonString.len and encodingType != NumberEncoding.hex and jsonString[i] == TOKEN_PERIOD) {
         encodingType = NumberEncoding.float;
         i += 1;
-        while (i < jsonString.len and isNumber(jsonString[i])): (i += 1) { }
+        while (i < jsonString.len and isNumber(jsonString[i])) : (i += 1) {}
     }
 
     // Handle exponent
-    if (i < jsonString.len and encodingType != NumberEncoding.hex
-            and (jsonString[i] == TOKEN_EXPONENT_LOWER or jsonString[i] == TOKEN_EXPONENT_UPPER)) {
+    if (i < jsonString.len and encodingType != NumberEncoding.hex and (jsonString[i] == TOKEN_EXPONENT_LOWER or jsonString[i] == TOKEN_EXPONENT_UPPER)) {
         encodingType = NumberEncoding.float;
         i += 1;
         if (!isNumberOrPlusOrMinus(jsonString[i])) {
@@ -856,7 +784,7 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         // Handle preceeding +/-
         i += 1;
         // Handle the exponent value
-        while (i < jsonString.len and isNumber(jsonString[i])): (i += 1) { }
+        while (i < jsonString.len and isNumber(jsonString[i])) : (i += 1) {}
     }
 
     if (i > jsonString.len) @panic("Fail");
@@ -867,14 +795,14 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         NumberEncoding.integer => JsonType.integer,
         NumberEncoding.float => JsonType.float,
         NumberEncoding.hex => JsonType.integer,
-        else => return error.ParseNumberError
+        else => return error.ParseNumberError,
     };
     jsonValue.value = switch (encodingType) {
         NumberEncoding.integer => .{ .integer = try std.fmt.parseInt(i64, jsonString[start..i], 10) },
         NumberEncoding.float => .{ .float = try std.fmt.parseFloat(f64, jsonString[start..i]) },
         // parseInt doesn't support 0x so we have to skip it and manually apply the sign
-        NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, jsonString[startingDigitAt + 2..i], 16) },
-        else => return error.ParseNumberError
+        NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, jsonString[startingDigitAt + 2 .. i], 16) },
+        else => return error.ParseNumberError,
     };
 
     outIndex.* += i;
@@ -893,16 +821,15 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
             }
 
             var buf: [4]u8 = undefined;
-            const intValue = try std.fmt.parseInt(u21, jsonString[index + 2..index + 6], 16);
+            const intValue = try std.fmt.parseInt(u21, jsonString[index + 2 .. index + 6], 16);
             const len = try std.unicode.utf8Encode(intValue, &buf);
             var i: usize = 0;
-            while (i < len): (i += 1) {
+            while (i < len) : (i += 1) {
                 try characters.append(buf[i]);
             }
 
             index += 6;
-        }
-        else {
+        } else {
             try characters.append(jsonString[index]);
             index += 1;
         }
@@ -934,7 +861,7 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
 fn expect(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
     const index = skipWhiteSpaces(jsonString, config);
     if (jsonString[index] != token) {
-        debug("Expected {c} found {c}", .{token, jsonString[index]});
+        debug("Expected {c} found {c}", .{ token, jsonString[index] });
         return error.UnexpectedTokenError;
     }
     return skipWhiteSpacesAfter(jsonString, config, index + 1);
@@ -943,7 +870,7 @@ fn expect(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!u
 /// Expects the next character be token or returns UnexpectedTokenError.
 fn expectOnly(jsonString: []const u8, token: u8) ParseErrors!usize {
     if (jsonString[0] != token) {
-        debug("Expected {c} found {c}", .{token, jsonString[0]});
+        debug("Expected {c} found {c}", .{ token, jsonString[0] });
         return error.UnexpectedTokenError;
     }
     return 1;
@@ -954,7 +881,7 @@ fn expectOnly(jsonString: []const u8, token: u8) ParseErrors!usize {
 fn expectUpTo(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
     const index = skipWhiteSpaces(jsonString, config);
     if (jsonString[index] != token) {
-        debug("Expected {c} found {c}", .{token, jsonString[index]});
+        debug("Expected {c} found {c}", .{ token, jsonString[index] });
         return error.UnexpectedTokenError;
     }
     return index + 1;
@@ -972,7 +899,7 @@ fn skipWhiteSpacesAfter(jsonString: []const u8, config: ParserConfig, start: usi
     var i: usize = start;
     while (true) {
         // Skip any whitespace
-        while (i < jsonString.len and isInsignificantWhitespace(jsonString[i], config)): (i += 1) { }
+        while (i < jsonString.len and isInsignificantWhitespace(jsonString[i], config)) : (i += 1) {}
 
         // Skip any comments
         if (config.parserType == ParserType.json5 and isComment(jsonString[i..jsonString.len])) {
@@ -994,13 +921,12 @@ fn skipComment(jsonString: []const u8) usize {
         // Skip the comment lead-in
         i += 2;
         // Single line comment - expect a newline
-        while (i < jsonString.len and jsonString[i] != TOKEN_NEW_LINE): (i += 1) { }
-    }
-    else if (jsonString[i + 1] == TOKEN_ASTERISK) {
+        while (i < jsonString.len and jsonString[i] != TOKEN_NEW_LINE) : (i += 1) {}
+    } else if (jsonString[i + 1] == TOKEN_ASTERISK) {
         // Skip the comment lead-in
         i += 2;
         // Multi-line comment
-        while (i + 1 < jsonString.len and (jsonString[i] != TOKEN_ASTERISK or jsonString[i + 1] != TOKEN_SOLIDUS)): (i += 1) { }
+        while (i + 1 < jsonString.len and (jsonString[i] != TOKEN_ASTERISK or jsonString[i + 1] != TOKEN_SOLIDUS)) : (i += 1) {}
         // Skip over the comment lead-out
         i += 2;
     }
@@ -1009,33 +935,18 @@ fn skipComment(jsonString: []const u8) usize {
 
 /// Returns true if jsonString starts with a comment
 fn isComment(jsonString: []const u8) bool {
-    return 1 < jsonString.len and jsonString[0] == TOKEN_SOLIDUS and (
-        jsonString[1] == TOKEN_SOLIDUS
-        or jsonString[1] == TOKEN_ASTERISK
-    );
+    return 1 < jsonString.len and jsonString[0] == TOKEN_SOLIDUS and (jsonString[1] == TOKEN_SOLIDUS or jsonString[1] == TOKEN_ASTERISK);
 }
 
 /// Returns true if a character matches the RFC8259 grammar specificiation for
 /// insignificant whitespace.
 fn isInsignificantWhitespace(char: u8, config: ParserConfig) bool {
     if (config.parserType == ParserType.rfc8259) {
-        return char == TOKEN_HORIZONTAL_TAB
-            or char == TOKEN_NEW_LINE
-            or char == TOKEN_CARRIAGE_RETURN
-            or char == TOKEN_SPACE;
+        return char == TOKEN_HORIZONTAL_TAB or char == TOKEN_NEW_LINE or char == TOKEN_CARRIAGE_RETURN or char == TOKEN_SPACE;
     }
 
-    return char == TOKEN_HORIZONTAL_TAB
-        or char == TOKEN_NEW_LINE
-        or char == TOKEN_VERTICAL_TAB
-        or char == TOKEN_FORM_FEED
-        or char == TOKEN_CARRIAGE_RETURN
-        or char == TOKEN_SPACE
-        or char == TOKEN_NON_BREAKING_SPACE
-        or char == TOKEN_LINE_SEPARATOR
-        or char == TOKEN_PARAGRAPH_SEPARATOR
-        or char == TOKEN_BOM;
-        // TODO: Space Separator Unicode category
+    return char == TOKEN_HORIZONTAL_TAB or char == TOKEN_NEW_LINE or char == TOKEN_VERTICAL_TAB or char == TOKEN_FORM_FEED or char == TOKEN_CARRIAGE_RETURN or char == TOKEN_SPACE or char == TOKEN_NON_BREAKING_SPACE or char == TOKEN_LINE_SEPARATOR or char == TOKEN_PARAGRAPH_SEPARATOR or char == TOKEN_BOM;
+    // TODO: Space Separator Unicode category
 }
 
 /// Returns true if the character is a plus or minus
@@ -1060,28 +971,16 @@ fn isNumber(char: u8) bool {
 
 /// Returns true if jsonString starts with word
 fn isReservedWord(jsonString: []const u8, word: []const u8) bool {
-    return word.len <= jsonString.len
-        and std.mem.eql(u8, jsonString[0..word.len], word);
+    return word.len <= jsonString.len and std.mem.eql(u8, jsonString[0..word.len], word);
 }
 
 /// Returns true if jsonString starts with an ECMA Script 5.1 identifier
 fn isStartOfEcmaScript51Identifier(jsonString: []const u8) bool {
     const char = jsonString[0];
     // Allowable Identifier starting characters
-    return char != TOKEN_COLON and (
-        isEcmaScript51IdentifierUnicodeCharacter(char)
-        or char == TOKEN_DOLLAR_SIGN
-        or char == TOKEN_UNDERSCORE
-        // \uXXXX
-        or (jsonString.len >= 6
-            and jsonString[0] == TOKEN_REVERSE_SOLIDUS
-            and jsonString[1] == 'u'
-            and isHexDigit(jsonString[2])
-            and isHexDigit(jsonString[3])
-            and isHexDigit(jsonString[4])
-            and isHexDigit(jsonString[5])
-        )
-    );
+    return char != TOKEN_COLON and (isEcmaScript51IdentifierUnicodeCharacter(char) or char == TOKEN_DOLLAR_SIGN or char == TOKEN_UNDERSCORE
+    // \uXXXX
+    or (jsonString.len >= 6 and jsonString[0] == TOKEN_REVERSE_SOLIDUS and jsonString[1] == 'u' and isHexDigit(jsonString[2]) and isHexDigit(jsonString[3]) and isHexDigit(jsonString[4]) and isHexDigit(jsonString[5])));
 }
 
 /// Returns true if the character is an ECMA Script 5.1 identifier unicode character
@@ -1091,38 +990,22 @@ fn isEcmaScript51IdentifierUnicodeCharacter(char: u8) bool {
 
 /// Returns true if the character is an ECMA Script 5.1 identifier character
 fn isValidEcmaScript51IdentifierCharacter(jsonString: []const u8) bool {
-    return jsonString[0] != TOKEN_COLON and (
-        isStartOfEcmaScript51Identifier(jsonString)
-        // TODO: or isUnicodeCombiningSpaceMark(jsonString[0])
-        or isUnicodeDigit(jsonString[0])
-        // TODO: or isUnicodeConnectorPunctuation(jsonString[0])
-        or jsonString[0] == TOKEN_ZERO_WIDTH_NON_JOINER
-        or jsonString[0] == TOKEN_ZERO_WIDTH_JOINER
-    );
+    return jsonString[0] != TOKEN_COLON and (isStartOfEcmaScript51Identifier(jsonString)
+    // TODO: or isUnicodeCombiningSpaceMark(jsonString[0])
+    or isUnicodeDigit(jsonString[0])
+    // TODO: or isUnicodeConnectorPunctuation(jsonString[0])
+    or jsonString[0] == TOKEN_ZERO_WIDTH_NON_JOINER or jsonString[0] == TOKEN_ZERO_WIDTH_JOINER);
 }
 
 /// Returns true if the character is a unicode digit
 fn isUnicodeDigit(char: u8) bool {
     return (char >= 0x0030 and char <= 0x0039)
-        // TODO: Finish these...
-        or (char >= 0x0660 and char <= 0x0669)
-        or (char >= 0x06F0 and char <= 0x06F9)
-        or (char >= 0x07C0 and char <= 0x07C9)
-        or (char >= 0x0966 and char <= 0x096F)
-        or (char >= 0x09E6 and char <= 0x09EF)
-        or (char >= 0x0A66 and char <= 0x0A6F)
-        or (char >= 0x0AE6 and char <= 0x0AEF)
-        or (char >= 0x0B66 and char <= 0x00BF)
-        or (char >= 0x0BE6 and char <= 0x0BEF)
-        or (char >= 0x0C66 and char <= 0x0C6F)
-        or (char >= 0x0CE6 and char <= 0x0CEF)
-        or (char >= 0x0D66 and char <= 0x0D6F);
+    // TODO: Finish these...
+    or (char >= 0x0660 and char <= 0x0669) or (char >= 0x06F0 and char <= 0x06F9) or (char >= 0x07C0 and char <= 0x07C9) or (char >= 0x0966 and char <= 0x096F) or (char >= 0x09E6 and char <= 0x09EF) or (char >= 0x0A66 and char <= 0x0A6F) or (char >= 0x0AE6 and char <= 0x0AEF) or (char >= 0x0B66 and char <= 0x00BF) or (char >= 0x0BE6 and char <= 0x0BEF) or (char >= 0x0C66 and char <= 0x0C6F) or (char >= 0x0CE6 and char <= 0x0CEF) or (char >= 0x0D66 and char <= 0x0D6F);
 }
 
 fn isHexDigit(char: u8) bool {
-    return (char >= '0' and char <= '9')
-        or (char >= 'A' and char <= 'F')
-        or (char >= 'a' and char <= 'f');
+    return (char >= '0' and char <= '9') or (char >= 'A' and char <= 'F') or (char >= 'a' and char <= 'f');
 }
 
 /// Helper for printing messages
@@ -1142,14 +1025,14 @@ fn expectParseNumberToParseNumber(number: anytype, text: []const u8, config: Par
     var index: usize = 0;
     const value = switch (@typeInfo(@TypeOf(number))) {
         @typeInfo(ParseErrors) => parseNumber(text, config, allocator, &index),
-        else => try parseNumber(text, config, allocator, &index)
+        else => try parseNumber(text, config, allocator, &index),
     };
 
     switch (@typeInfo(@TypeOf(number))) {
         .Int, @typeInfo(comptime_int) => try std.testing.expectEqual(JsonType.integer, value.type),
         .Float, @typeInfo(comptime_float) => try std.testing.expectEqual(JsonType.float, value.type),
         @typeInfo(ParseErrors) => {},
-        else => @compileError("Eek: " ++ @typeName(@TypeOf(number)))
+        else => @compileError("Eek: " ++ @typeName(@TypeOf(number))),
     }
 
     switch (@typeInfo(@TypeOf(number))) {
@@ -1158,16 +1041,16 @@ fn expectParseNumberToParseNumber(number: anytype, text: []const u8, config: Par
         @typeInfo(comptime_float) => try std.testing.expectEqual(@as(f64, number), value.float()),
         .Float => try std.testing.expectEqual(number, value.float()),
         @typeInfo(ParseErrors) => try std.testing.expectError(number, value),
-        else => @compileError("Eek: " ++ @typeName(@TypeOf(number)))
+        else => @compileError("Eek: " ++ @typeName(@TypeOf(number))),
     }
 
     switch (@typeInfo(@TypeOf(number))) {
-        @typeInfo(ParseErrors) => { },
+        @typeInfo(ParseErrors) => {},
         else => {
             if (!value.indestructible) {
                 value.deinit(allocator);
             }
-        }
+        },
     }
 
     const Check = std.heap.Check;
@@ -1332,8 +1215,7 @@ test "RFC8259.4: parseObject can parse a simple object /1" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("{\"key1\": \"foo\", \"key2\": \"foo2\", \"key3\": -1, \"key4\": [], \"key5\": { } }",
-        CONFIG_RFC8259, allocator, &index);
+    var jsonResult = try parseObject("{\"key1\": \"foo\", \"key2\": \"foo2\", \"key3\": -1, \"key4\": [], \"key5\": { } }", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1369,9 +1251,7 @@ test "RFC8259.4: parseObject can parse a simple object /2" {
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
     var index: usize = 0;
-    var jsonResult = try parseObject(
-        "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key1\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key3\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key4\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key5\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}",
-        CONFIG_RFC8259, allocator, &index);
+    var jsonResult = try parseObject("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key1\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key3\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key4\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key5\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}", CONFIG_RFC8259, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1466,7 +1346,7 @@ test "RFC8259.5: parseArray can parse an simple array /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    // 
+    //
     const text = "[-1,-1.2,0,1,1.2,\"\",\"foo\",true,false,null,{},{\"foo\":\"bar\", \"baz\": {}}]";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
@@ -1484,7 +1364,7 @@ test "RFC8259.5: parseArray can parse an simple array /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    // 
+    //
     const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}0\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}true\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}false\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}null\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"bar\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"baz\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
     var index: usize = 0;
     const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
@@ -1906,8 +1786,7 @@ test "JSON5.7: parseObject ignores multi-line comments /1" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1941,8 +1820,7 @@ test "JSON5.7: parseObject ignores single-line comments /2" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2172,8 +2050,7 @@ test "JSON5.3: parseObject can parse a simple object /1" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { } }",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { } }", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2207,8 +2084,7 @@ test "JSON5.3: parseObject can parse a simple object with trailing comma" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { }, }",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { }, }", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2385,8 +2261,7 @@ test "JSON5.7: parseObject ignores multi-line comments" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2420,8 +2295,7 @@ test "JSON5.7: parseObject ignores single-line comments" {
     const allocator = gpa.allocator();
 
     var index: usize = 0;
-    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n",
-        CONFIG_JSON5, allocator, &index);
+    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n", CONFIG_JSON5, allocator, &index);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2502,7 +2376,7 @@ test "README.md simple test" {
         \\    }
         \\  ]
         \\}
-        , allocator);
+    , allocator);
     const bazObj = value.get("foo").get(4);
 
     bazObj.print(null);
@@ -2534,7 +2408,7 @@ test "README.md simple test json5" {
         \\    },
         \\  ],
         \\}
-        , allocator);
+    , allocator);
     const bazObj = value.get("foo").get(4);
 
     bazObj.print(null);
