@@ -1,0 +1,11 @@
+{
+    "foo": [
+        null,
+        true,
+        false,
+        "bar",
+        {
+            "baz": -13e+37
+        }
+    ]
+}

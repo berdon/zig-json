@@ -1,6 +1,10 @@
 ///! Simple JSON parsing library with a focus on a simple, usable API.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Buffer = @import("buffer.zig").Buffer;
+const BufferErrors = @import("buffer.zig").BufferErrors;
+const bufferFromText = @import("buffer.zig").bufferFromText;
+const bufferFromStreamSource = @import("buffer.zig").bufferFromStreamSource;
 
 /// Enable to get debug logging during parsing
 /// TODO: Probably...consider std.log?
@@ -104,7 +108,7 @@ pub const ParseError = error{
 };
 
 /// All parser errors including allocation, and int/float parsing errors.
-pub const ParseErrors = ParseError || Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError;
+pub const ParseErrors = ParseError || Allocator.Error || std.fmt.ParseIntError || std.fmt.ParseFloatError || BufferErrors;
 
 /// Allows callers to configure which parser style to use.
 pub const ParserConfig = struct { parserType: ParserType = ParserType.rfc8259 };
@@ -275,13 +279,15 @@ pub const JsonArray = struct {
     }
 };
 
+const JsonValueTypeUnion = union { integer: i64, float: f64, array: *JsonArray, string: []const u8, object: *JsonObject, boolean: bool };
+
 /// Abstraction for all JSON values
 pub const JsonValue = struct {
     /// The JSON value type
     type: JsonType,
 
     /// The JSON value
-    value: ?union { integer: i64, float: f64, array: *JsonArray, string: []const u8, object: *JsonObject, boolean: bool },
+    value: ?JsonValueTypeUnion,
 
     /// A pointer for the string value if we don't use a slice from the parsed
     /// string. Presently we're always using this but we can step back for non
@@ -448,87 +454,106 @@ var JSON_NEGATIVE_NAN = JsonValue{ .type = JsonType.float, .value = .{ .float = 
 
 /// Parse a JSON5 string using the provided allocator
 pub fn parse(jsonString: []const u8, allocator: Allocator) !*JsonValue {
-    // Walk through each token
-    var index: usize = 0;
-    return parseValue(jsonString, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText(jsonString);
+    return parseValue(&buffer, CONFIG_RFC8259, allocator);
 }
 
-/// Parse a JSON string using the provided allocator
+fn parseBuffer(buffer: *Buffer, allocator: Allocator) !*JsonValue {
+    return parseValue(buffer, CONFIG_RFC8259, allocator);
+}
+
+pub fn parseFile(file: std.fs.File, allocator: Allocator) !*JsonValue {
+    var streamSource = std.io.StreamSource{ .file = file };
+    var buffer = bufferFromStreamSource(&streamSource);
+    return parseValue(&buffer, CONFIG_RFC8259, allocator);
+}
+
+/// Parse a JSON5 string using the provided allocator
 pub fn parseJson5(jsonString: []const u8, allocator: Allocator) !*JsonValue {
-    // Walk through each token
-    var index: usize = 0;
-    return parseValue(jsonString, CONFIG_JSON5, allocator, &index);
+    const buffer = bufferFromText(jsonString);
+    return parseValue(buffer, CONFIG_JSON5, allocator);
 }
 
-fn internalParse(jsonString: []const u8, config: ParserConfig, allocator: Allocator) !*JsonValue {
+fn parseJson5Buffer(buffer: *Buffer, allocator: Allocator) !*JsonValue {
+    return parseValue(buffer, CONFIG_JSON5, allocator);
+}
+
+/// Parse a JSON5 file using the provided allocator
+pub fn parseJson5File(file: std.fs.File, allocator: Allocator) !*JsonValue {
+    var streamSource = std.io.StreamSource{ .file = file };
+    const buffer = bufferFromStreamSource(&streamSource);
+    return parseValue(buffer, CONFIG_JSON5, allocator);
+}
+
+fn internalParse(buffer: *Buffer, config: ParserConfig, allocator: Allocator) !*JsonValue {
     // Walk through each token
-    var index: usize = 0;
-    return parseValue(jsonString, config, allocator, &index);
+    return parseValue(buffer, config, allocator);
 }
 
 /// Parse a JSON value from the provided slice
 /// Returns the index of the next character to read
-fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
-    var index = skipWhiteSpaces(jsonString, config);
-    const char = jsonString[index];
+fn parseValue(buffer: *Buffer, config: ParserConfig, allocator: Allocator) ParseErrors!*JsonValue {
+    try skipWhiteSpaces(buffer, config);
+    const char = try buffer.peek();
     const result = result: {
         // { indicates an object
         if (char == TOKEN_CURLY_BRACKET_OPEN) {
-            var result = try parseObject(jsonString[index..jsonString.len], config, allocator, &index);
+            var result = try parseObject(buffer, config, allocator);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
         // [ indicates an array
         if (char == TOKEN_BRACKET_OPEN) {
-            var result = try parseArray(jsonString[index..jsonString.len], config, allocator, &index);
+            var result = try parseArray(buffer, config, allocator);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
         // " indicates a string
         if (char == TOKEN_DOUBLE_QUOTE) {
-            var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_DOUBLE_QUOTE, &index);
+            var result = try parseStringWithTerminal(buffer, config, allocator, TOKEN_DOUBLE_QUOTE);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
         // ' indicates a string (json5)
         if (config.parserType == ParserType.json5 and char == TOKEN_SINGLE_QUOTE) {
-            var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_SINGLE_QUOTE, &index);
+            var result = try parseStringWithTerminal(buffer, config, allocator, TOKEN_SINGLE_QUOTE);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
         // 0-9|- indicates a number
-        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_INFINITY) or isReservedWord(jsonString[index..jsonString.len], TOKEN_NAN) or isNumberOrPlusOrMinus(char)) {
-            var result = try parseNumber(jsonString[index..jsonString.len], config, allocator, &index);
+        if (try isReservedWord(buffer, TOKEN_INFINITY) or try isReservedWord(buffer, TOKEN_NAN) or isNumberOrPlusOrMinus(char)) {
+            var result = try parseNumber(buffer, config, allocator);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
-        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_TRUE)) {
-            index += TOKEN_TRUE.len;
+        if (try isReservedWord(buffer, TOKEN_TRUE)) {
+            try buffer.skipBytes(TOKEN_TRUE.len);
             break :result &JSON_TRUE;
         }
 
-        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_FALSE)) {
-            index += TOKEN_FALSE.len;
+        if (try isReservedWord(buffer, TOKEN_FALSE)) {
+            try buffer.skipBytes(TOKEN_FALSE.len);
             break :result &JSON_FALSE;
         }
 
-        if (isReservedWord(jsonString[index..jsonString.len], TOKEN_NULL)) {
-            index += TOKEN_NULL.len;
+        if (try isReservedWord(buffer, TOKEN_NULL)) {
+            try buffer.skipBytes(TOKEN_NULL.len);
             break :result &JSON_NULL;
         }
 
-        debug("Unable to parse value from \"{s}\"", .{jsonString[index..jsonString.len]});
+        const leftOver = try buffer.substringOwned(try buffer.getPos(), 16, allocator);
+        defer allocator.free(leftOver);
+        debug("Unable to parse value from \"{s}...\"", .{leftOver});
+
         return error.ParseValueError;
     };
 
     errdefer result.deinit(allocator);
-
-    outIndex.* += index;
     return result;
 }
 
@@ -536,46 +561,46 @@ fn parseValue(jsonString: []const u8, config: ParserConfig, allocator: Allocator
 /// Returns the index of the next character to read
 /// Note: parseObject _assumes_ the leading { has been stripped and jsonString
 ///  starts after that point.
-fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
+fn parseObject(buffer: *Buffer, config: ParserConfig, allocator: Allocator) ParseErrors!*JsonValue {
     const jsonObject = try allocator.create(JsonObject);
     errdefer jsonObject.deinit(allocator);
 
     jsonObject.map = std.StringArrayHashMap(*JsonValue).init(allocator);
 
     var wasLastComma = false;
-    var index = try expect(jsonString, config, TOKEN_CURLY_BRACKET_OPEN);
-    while (index < jsonString.len and jsonString[index] != TOKEN_CURLY_BRACKET_CLOSE) {
-        const char = jsonString[index];
+    try expect(buffer, config, TOKEN_CURLY_BRACKET_OPEN);
+    while (try buffer.getPos() < try buffer.getEndPos() and try buffer.peek() != TOKEN_CURLY_BRACKET_CLOSE) {
+        const char = try buffer.peek();
         // Skip comments
-        if (isComment(jsonString[index..jsonString.len])) {
-            index += skipComment(jsonString[index..jsonString.len]);
+        if (try isComment(buffer)) {
+            try skipComment(buffer);
             continue;
         }
         if (char == TOKEN_COMMA or isInsignificantWhitespace(char, config)) {
             wasLastComma = char == TOKEN_COMMA or wasLastComma;
-            index += 1;
+            try buffer.skipBytes(1);
             continue;
         }
 
         if (jsonObject.map.count() > 0 and !wasLastComma) {
-            debug("Unexpected token; expected ',' but found a '{c}' instead", .{jsonString[index]});
+            debug("Unexpected token; expected ',' but found a '{?}' instead", .{buffer.lastByte()});
             return error.UnexpectedTokenError;
         }
         wasLastComma = false;
 
         const key = key: {
             if (char == TOKEN_DOUBLE_QUOTE) {
-                var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_DOUBLE_QUOTE, &index);
+                var result = try parseStringWithTerminal(buffer, config, allocator, TOKEN_DOUBLE_QUOTE);
                 errdefer result.deinit(allocator);
                 break :key result;
             }
             if (config.parserType == ParserType.json5 and char == TOKEN_SINGLE_QUOTE) {
-                var result = try parseStringWithTerminal(jsonString[index..jsonString.len], config, allocator, TOKEN_SINGLE_QUOTE, &index);
+                var result = try parseStringWithTerminal(buffer, config, allocator, TOKEN_SINGLE_QUOTE);
                 errdefer result.deinit(allocator);
                 break :key result;
             }
-            if (config.parserType == ParserType.json5 and isStartOfEcmaScript51Identifier(jsonString[index..jsonString.len])) {
-                var result = try parseEcmaScript51Identifier(jsonString[index..jsonString.len], allocator, &index);
+            if (config.parserType == ParserType.json5 and try isStartOfEcmaScript51Identifier(buffer)) {
+                var result = try parseEcmaScript51Identifier(buffer, allocator);
                 errdefer result.deinit(allocator);
                 break :key result;
             }
@@ -583,8 +608,8 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         };
         errdefer key.deinit(allocator);
 
-        index += try expect(jsonString[index..jsonString.len], config, TOKEN_COLON);
-        const value = try parseValue(jsonString[index..jsonString.len], config, allocator, &index);
+        try expect(buffer, config, TOKEN_COLON);
+        const value = try parseValue(buffer, config, allocator);
         errdefer value.deinit(allocator);
 
         const keyString = try allocator.alloc(u8, key.string().len);
@@ -597,7 +622,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
     }
 
     // Account for the terminal character
-    outIndex.* += index + 1;
+    try buffer.skipBytes(1);
 
     const jsonValue = try allocator.create(JsonValue);
     errdefer jsonValue.deinit(allocator);
@@ -612,7 +637,7 @@ fn parseObject(jsonString: []const u8, config: ParserConfig, allocator: Allocato
 /// Returns the index of the next character to read
 /// Note: parseArray _assumes_ the leading [ has been stripped and jsonString
 ///  starts after that point.
-fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
+fn parseArray(buffer: *Buffer, config: ParserConfig, allocator: Allocator) ParseErrors!*JsonValue {
     const jsonArray = try allocator.create(JsonArray);
     errdefer jsonArray.deinit(allocator);
 
@@ -620,21 +645,20 @@ fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator
 
     // Flag to indicate if we've already seen a comma
     var wasLastComma = false;
-    var index = try expect(jsonString, config, TOKEN_BRACKET_OPEN);
-    while (index < jsonString.len and jsonString[index] != TOKEN_BRACKET_CLOSE) {
+    try expect(buffer, config, TOKEN_BRACKET_OPEN);
+    while (try buffer.getPos() < try buffer.getEndPos() and try buffer.peek() != TOKEN_BRACKET_CLOSE) {
         // Skip comments
-        if (isComment(jsonString[index..jsonString.len])) {
-            index += skipComment(jsonString[index..jsonString.len]);
+        if (try isComment(buffer)) {
+            try skipComment(buffer);
             continue;
         }
         // Skip commas and insignificant whitespaces
-        if (jsonString[index] == TOKEN_COMMA or isInsignificantWhitespace(jsonString[index], config)) {
-            wasLastComma = jsonString[index] == TOKEN_COMMA or wasLastComma;
-            index += 1;
+        if (try buffer.peek() == TOKEN_COMMA or isInsignificantWhitespace(try buffer.peek(), config)) {
+            wasLastComma = try buffer.readByte() == TOKEN_COMMA or wasLastComma;
             continue;
         }
         wasLastComma = false;
-        const jsonValue = try parseValue(jsonString[index..jsonString.len], config, allocator, &index);
+        const jsonValue = try parseValue(buffer, config, allocator);
         errdefer jsonValue.deinit(allocator);
         try jsonArray.array.append(jsonValue);
     }
@@ -644,7 +668,7 @@ fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator
     }
 
     // Account for the terminal character
-    outIndex.* += index + 1;
+    try buffer.skipBytes(1);
 
     const jsonValue = try allocator.create(JsonValue);
     errdefer jsonValue.deinit(allocator);
@@ -657,25 +681,25 @@ fn parseArray(jsonString: []const u8, config: ParserConfig, allocator: Allocator
 
 /// Parse a string from the provided slice
 /// Returns the index of the next character to read
-fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocator: Allocator, terminal: u8, outIndex: *usize) ParseErrors!*JsonValue {
-    var i = try expectUpTo(jsonString, config, terminal);
+fn parseStringWithTerminal(buffer: *Buffer, config: ParserConfig, allocator: Allocator, terminal: u8) ParseErrors!*JsonValue {
+    try expectUpTo(buffer, config, terminal);
     var slashCount: usize = 0;
     var characters = std.ArrayList(u8).init(allocator);
-    while (i < jsonString.len and (jsonString[i] != terminal or slashCount % 2 == 1)) : (i += 1) {
+    while (try buffer.getPos() < try buffer.getEndPos() and (try buffer.peek() != terminal or slashCount % 2 == 1)) : (try buffer.skipBytes(1)) {
         // Track escaping
-        if (jsonString[i] == TOKEN_REVERSE_SOLIDUS) {
+        if (try buffer.peek() == TOKEN_REVERSE_SOLIDUS) {
             slashCount += 1;
 
             if (slashCount % 2 == 0) {
-                try characters.append(jsonString[i]);
+                try characters.append(try buffer.peek());
             }
         } else {
             slashCount = 0;
-            try characters.append(jsonString[i]);
+            try characters.append(try buffer.peek());
         }
     }
 
-    if (i >= jsonString.len) return error.ParseStringError;
+    if (try buffer.getPos() >= try buffer.getEndPos()) return error.ParseStringError;
 
     const jsonValue = try allocator.create(JsonValue);
     errdefer jsonValue.deinit(allocator);
@@ -692,102 +716,101 @@ fn parseStringWithTerminal(jsonString: []const u8, config: ParserConfig, allocat
     jsonValue.value = .{ .string = copy };
     jsonValue.stringPtr = copy;
 
-    outIndex.* += i + 1;
+    try buffer.skipBytes(1);
     return jsonValue;
 }
 
 /// Parse a number from the provided slice
 /// Returns the index of the next character to read
-fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
+fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) ParseErrors!*JsonValue {
     var encodingType = NumberEncoding.integer;
-    const start = skipWhiteSpaces(jsonString, config);
-    var i: usize = start;
-    var startingDigitAt: usize = start;
+    try skipWhiteSpaces(buffer, config);
+    const start = try buffer.getPos();
+    var startingDigitAt: usize = try buffer.getPos();
     var polarity: isize = 1;
 
-    if (i >= jsonString.len) {
+    if (try buffer.getPos() >= try buffer.getEndPos()) {
         debug("Number cannot be zero length", .{});
         return error.ParseNumberError;
     }
 
     // First character can be a minus or number
-    if (config.parserType == ParserType.json5 and isPlusOrMinus(jsonString[i]) or config.parserType == ParserType.rfc8259 and jsonString[i] == TOKEN_MINUS) {
-        polarity = if (jsonString[i] == TOKEN_MINUS) -1 else 1;
+    if (config.parserType == ParserType.json5 and isPlusOrMinus(try buffer.peek()) or config.parserType == ParserType.rfc8259 and try buffer.peek() == TOKEN_MINUS) {
+        polarity = if (try buffer.readByte() == TOKEN_MINUS) -1 else 1;
         startingDigitAt += 1;
-        i += 1;
     }
 
-    if (i >= jsonString.len) {
+    if (try buffer.getPos() >= try buffer.getEndPos()) {
         debug("Invalid number; cannot be just + or -", .{});
         return error.ParseNumberError;
     }
 
-    if (config.parserType == ParserType.json5 and isReservedWord(jsonString[i..jsonString.len], TOKEN_INFINITY)) {
-        outIndex.* += i + TOKEN_INFINITY.len;
+    if (config.parserType == ParserType.json5 and try isReservedWord(buffer, TOKEN_INFINITY)) {
+        try buffer.skipBytes(TOKEN_INFINITY.len);
         return if (polarity > 0) &JSON_POSITIVE_INFINITY else &JSON_NEGATIVE_INFINITY;
     }
 
-    if (config.parserType == ParserType.json5 and isReservedWord(jsonString[i..jsonString.len], TOKEN_NAN)) {
-        outIndex.* += i + TOKEN_NAN.len;
+    if (config.parserType == ParserType.json5 and try isReservedWord(buffer, TOKEN_NAN)) {
+        try buffer.skipBytes(TOKEN_NAN.len);
         return if (polarity > 0) &JSON_POSITIVE_NAN else &JSON_NEGATIVE_NAN;
     }
 
     // Next character either is a digit or a .
-    if (jsonString[i] == '0') {
-        i += 1;
-        if (i < jsonString.len) {
-            if (jsonString[i] == TOKEN_ZERO) {
+    if (try buffer.peek() == '0') {
+        try buffer.skipBytes(1);
+        if (try buffer.getPos() < try buffer.getEndPos()) {
+            if (try buffer.peek() == TOKEN_ZERO) {
                 debug("Invalid number; number cannot start with multiple zeroes", .{});
                 return error.ParseNumberError;
             }
-            if (jsonString[i] == 'x') {
+            if (try buffer.peek() == 'x') {
                 encodingType = NumberEncoding.hex;
-                i += 1;
+                try buffer.skipBytes(1);
             }
         }
-    } else if (isNumber(jsonString[i])) {
-        i += 1;
-    } else if (jsonString[i] == TOKEN_PERIOD) {
+    } else if (isNumber(try buffer.peek())) {
+        try buffer.skipBytes(1);
+    } else if (try buffer.peek() == TOKEN_PERIOD) {
         if (config.parserType == ParserType.rfc8259) {
             debug("Invalid number; RFS8259 doesn't support floating point numbers starting with a decimal point", .{});
             return error.ParseNumberError;
         }
 
         encodingType = NumberEncoding.float;
-        i += 1;
-        if (i >= jsonString.len) {
+        try buffer.skipBytes(1);
+        if (try buffer.getPos() >= try buffer.getEndPos()) {
             debug("Invalid number; decimal value must follow decimal point", .{});
             return error.ParseNumberError;
         }
     } else {
-        debug("Invalid number; invalid starting character, '{s}'", .{jsonString[start .. i + 1]});
+        debug("Invalid number; invalid starting character, '{?}'", .{buffer.lastByte()});
         return error.ParseNumberError;
     }
 
     // Walk through each character
-    while (i < jsonString.len and ((encodingType != NumberEncoding.hex and isNumber(jsonString[i])) or (encodingType == NumberEncoding.hex and isHexDigit(jsonString[i])))) : (i += 1) {}
+    while (try buffer.getPos() < try buffer.getEndPos() and ((encodingType != NumberEncoding.hex and isNumber(try buffer.peek())) or (encodingType == NumberEncoding.hex and isHexDigit(try buffer.peek())))) : (try buffer.skipBytes(1)) {}
 
     // Handle decimal numbers
-    if (i < jsonString.len and encodingType != NumberEncoding.hex and jsonString[i] == TOKEN_PERIOD) {
+    if (try buffer.getPos() < try buffer.getEndPos() and encodingType != NumberEncoding.hex and try buffer.peek() == TOKEN_PERIOD) {
         encodingType = NumberEncoding.float;
-        i += 1;
-        while (i < jsonString.len and isNumber(jsonString[i])) : (i += 1) {}
+        try buffer.skipBytes(1);
+        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try buffer.skipBytes(1)) {}
     }
 
     // Handle exponent
-    if (i < jsonString.len and encodingType != NumberEncoding.hex and (jsonString[i] == TOKEN_EXPONENT_LOWER or jsonString[i] == TOKEN_EXPONENT_UPPER)) {
+    if (try buffer.getPos() < try buffer.getEndPos() and encodingType != NumberEncoding.hex and (try buffer.peek() == TOKEN_EXPONENT_LOWER or try buffer.peek() == TOKEN_EXPONENT_UPPER)) {
         encodingType = NumberEncoding.float;
-        i += 1;
-        if (!isNumberOrPlusOrMinus(jsonString[i])) {
+        try buffer.skipBytes(1);
+        if (!isNumberOrPlusOrMinus(try buffer.peek())) {
             return error.ParseNumberError;
         }
         // Handle preceeding +/-
-        i += 1;
+        try buffer.skipBytes(1);
         // Handle the exponent value
-        while (i < jsonString.len and isNumber(jsonString[i])) : (i += 1) {}
+        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try buffer.skipBytes(1)) {}
     }
 
-    if (i > jsonString.len) @panic("Fail");
+    if (try buffer.getPos() > try buffer.getEndPos()) @panic("Fail");
     const jsonValue = try allocator.create(JsonValue);
     errdefer jsonValue.deinit(allocator);
 
@@ -797,45 +820,59 @@ fn parseNumber(jsonString: []const u8, config: ParserConfig, allocator: Allocato
         NumberEncoding.hex => JsonType.integer,
         else => return error.ParseNumberError,
     };
+
+    const intFloatBuffer = try buffer.substringOwned(start, try buffer.getPos(), allocator);
+    defer allocator.free(intFloatBuffer);
+
+    // TODO: Figure out why this block couldn't be in the switch below; kept complaining about not being able to
+    //  initialize the union
+    var hexBuffer: []const u8 = undefined;
+    if (encodingType == NumberEncoding.hex) {
+        hexBuffer = try buffer.substringOwned(startingDigitAt + 2, try buffer.getPos(), allocator);
+    }
+
     jsonValue.value = switch (encodingType) {
-        NumberEncoding.integer => .{ .integer = try std.fmt.parseInt(i64, jsonString[start..i], 10) },
-        NumberEncoding.float => .{ .float = try std.fmt.parseFloat(f64, jsonString[start..i]) },
+        NumberEncoding.integer => .{ .integer = try std.fmt.parseInt(i64, intFloatBuffer, 10) },
+        NumberEncoding.float => .{ .float = try std.fmt.parseFloat(f64, intFloatBuffer) },
         // parseInt doesn't support 0x so we have to skip it and manually apply the sign
-        NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, jsonString[startingDigitAt + 2 .. i], 16) },
+        NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, hexBuffer, 16) },
         else => return error.ParseNumberError,
     };
 
-    outIndex.* += i;
+    if (encodingType == NumberEncoding.hex) {
+        allocator.free(hexBuffer);
+    }
+
     return jsonValue;
 }
 
 // TODO: Drop the JsonValue return
-fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, outIndex: *usize) ParseErrors!*JsonValue {
+fn parseEcmaScript51Identifier(buffer: *Buffer, allocator: Allocator) ParseErrors!*JsonValue {
     var characters = std.ArrayList(u8).init(allocator);
-    var index: usize = 0;
-    while (index < jsonString.len and isValidEcmaScript51IdentifierCharacter(jsonString[index..jsonString.len])) {
-        if (jsonString[index] == TOKEN_REVERSE_SOLIDUS) {
+    while (try buffer.getPos() < try buffer.getEndPos() and try isValidEcmaScript51IdentifierCharacter(buffer)) {
+        if (try buffer.peek() == TOKEN_REVERSE_SOLIDUS) {
             // Unicode escaped character
-            if (jsonString.len - index < 6) {
+            if (try buffer.getEndPos() - try buffer.getPos() < 6) {
                 return error.ParseStringError;
             }
 
             var buf: [4]u8 = undefined;
-            const intValue = try std.fmt.parseInt(u21, jsonString[index + 2 .. index + 6], 16);
+            const intBuffer = try buffer.substringOwned(try buffer.getPos() + 2, try buffer.getPos() + 6, allocator);
+            defer allocator.free(intBuffer);
+            const intValue = try std.fmt.parseInt(u21, intBuffer, 16);
             const len = try std.unicode.utf8Encode(intValue, &buf);
             var i: usize = 0;
             while (i < len) : (i += 1) {
                 try characters.append(buf[i]);
             }
 
-            index += 6;
+            try buffer.skipBytes(6);
         } else {
-            try characters.append(jsonString[index]);
-            index += 1;
+            try characters.append(try buffer.readByte());
         }
     }
 
-    if (index > jsonString.len) return error.ParseStringError;
+    if (try buffer.getPos() > try buffer.getEndPos()) return error.ParseStringError;
 
     const jsonValue = try allocator.create(JsonValue);
     errdefer jsonValue.deinit(allocator);
@@ -852,90 +889,82 @@ fn parseEcmaScript51Identifier(jsonString: []const u8, allocator: Allocator, out
     jsonValue.value = .{ .string = copy };
     jsonValue.stringPtr = copy;
 
-    outIndex.* += index;
     return jsonValue;
 }
 
 /// Expects the next significant character be token, skipping over all leading and trailing
 /// insignificant whitespace, or returns UnexpectedTokenError.
-fn expect(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
-    const index = skipWhiteSpaces(jsonString, config);
-    if (jsonString[index] != token) {
-        debug("Expected {c} found {c}", .{ token, jsonString[index] });
+fn expect(buffer: *Buffer, config: ParserConfig, token: u8) ParseErrors!void {
+    try skipWhiteSpaces(buffer, config);
+    if (try buffer.peek() != token) {
+        debug("Expected {c} found {c}", .{ token, try buffer.peek() });
         return error.UnexpectedTokenError;
     }
-    return skipWhiteSpacesAfter(jsonString, config, index + 1);
+    try buffer.skipBytes(1);
+    try skipWhiteSpaces(buffer, config);
 }
 
 /// Expects the next character be token or returns UnexpectedTokenError.
-fn expectOnly(jsonString: []const u8, token: u8) ParseErrors!usize {
-    if (jsonString[0] != token) {
-        debug("Expected {c} found {c}", .{ token, jsonString[0] });
+fn expectOnly(buffer: *Buffer, token: u8) ParseErrors!void {
+    if (try buffer.peek() != token) {
+        debug("Expected {c} found {c}", .{ token, try buffer.peek() });
         return error.UnexpectedTokenError;
     }
-    return 1;
+    try buffer.skipBytes(1);
 }
 
 /// Expects the next significant character be token, skipping over all leading insignificant
 /// whitespace, or returns UnexpectedTokenError.
-fn expectUpTo(jsonString: []const u8, config: ParserConfig, token: u8) ParseErrors!usize {
-    const index = skipWhiteSpaces(jsonString, config);
-    if (jsonString[index] != token) {
-        debug("Expected {c} found {c}", .{ token, jsonString[index] });
+fn expectUpTo(buffer: *Buffer, config: ParserConfig, token: u8) ParseErrors!void {
+    try skipWhiteSpaces(buffer, config);
+    if (try buffer.peek() != token) {
+        debug("Expected {c} found {c}", .{ token, try buffer.peek() });
         return error.UnexpectedTokenError;
     }
-    return index + 1;
+    try buffer.skipBytes(1);
 }
 
 /// Returns the index in the string with the next, significant character
 /// starting from the beginning.
-fn skipWhiteSpaces(jsonString: []const u8, config: ParserConfig) usize {
-    return skipWhiteSpacesAfter(jsonString, config, 0);
-}
-
-/// Returns the index in the string with the next, significant character
-/// starting after start.
-fn skipWhiteSpacesAfter(jsonString: []const u8, config: ParserConfig, start: usize) usize {
-    var i: usize = start;
+fn skipWhiteSpaces(buffer: *Buffer, config: ParserConfig) ParseErrors!void {
     while (true) {
         // Skip any whitespace
-        while (i < jsonString.len and isInsignificantWhitespace(jsonString[i], config)) : (i += 1) {}
+        while (try buffer.getPos() < try buffer.getEndPos() and isInsignificantWhitespace(try buffer.peek(), config)) : (try buffer.skipBytes(1)) {}
 
         // Skip any comments
-        if (config.parserType == ParserType.json5 and isComment(jsonString[i..jsonString.len])) {
-            i += skipComment(jsonString[i..jsonString.len]);
+        if (config.parserType == ParserType.json5 and try isComment(buffer)) {
+            try skipComment(buffer);
 
             // If we found comments; we need to ensure we've skipped whitespace again
             continue;
         }
 
-        return i;
+        return;
     }
 }
 
 /// Skip over comments
-fn skipComment(jsonString: []const u8) usize {
-    if (!isComment(jsonString)) return 0;
-    var i: usize = 0;
-    if (jsonString[i + 1] == TOKEN_SOLIDUS) {
-        // Skip the comment lead-in
-        i += 2;
+fn skipComment(buffer: *Buffer) ParseErrors!void {
+    if (!try isComment(buffer)) return;
+
+    var tokens: [2]u8 = undefined;
+    _ = try buffer.read(&tokens);
+    if (tokens[1] == TOKEN_SOLIDUS) {
         // Single line comment - expect a newline
-        while (i < jsonString.len and jsonString[i] != TOKEN_NEW_LINE) : (i += 1) {}
-    } else if (jsonString[i + 1] == TOKEN_ASTERISK) {
-        // Skip the comment lead-in
-        i += 2;
+        while (try buffer.getPos() < try buffer.getEndPos() and try buffer.peek() != TOKEN_NEW_LINE) : (try buffer.skipBytes(1)) {}
+    } else if (tokens[1] == TOKEN_ASTERISK) {
         // Multi-line comment
-        while (i + 1 < jsonString.len and (jsonString[i] != TOKEN_ASTERISK or jsonString[i + 1] != TOKEN_SOLIDUS)) : (i += 1) {}
+        while (try buffer.getPos() < try buffer.getEndPos() and (try buffer.peek() != TOKEN_ASTERISK or try buffer.peekNext() != TOKEN_SOLIDUS)) : (try buffer.skipBytes(1)) {}
         // Skip over the comment lead-out
-        i += 2;
+        try buffer.skipBytes(2);
+    } else {
+        unreachable;
     }
-    return i;
 }
 
 /// Returns true if jsonString starts with a comment
-fn isComment(jsonString: []const u8) bool {
-    return 1 < jsonString.len and jsonString[0] == TOKEN_SOLIDUS and (jsonString[1] == TOKEN_SOLIDUS or jsonString[1] == TOKEN_ASTERISK);
+fn isComment(buffer: *Buffer) ParseErrors!bool {
+    return 1 < try buffer.getEndPos() and try buffer.peek() == TOKEN_SOLIDUS and (try buffer.peekNext() == TOKEN_SOLIDUS or try buffer.peekNext() == TOKEN_ASTERISK);
 }
 
 /// Returns true if a character matches the RFC8259 grammar specificiation for
@@ -970,17 +999,28 @@ fn isNumber(char: u8) bool {
 }
 
 /// Returns true if jsonString starts with word
-fn isReservedWord(jsonString: []const u8, word: []const u8) bool {
-    return word.len <= jsonString.len and std.mem.eql(u8, jsonString[0..word.len], word);
+fn isReservedWord(buffer: *Buffer, word: []const u8) ParseErrors!bool {
+    if (try buffer.getPos() + word.len > try buffer.getEndPos()) return false;
+    var wordBuffer: [128]u8 = undefined;
+    const count = try buffer.readN(&wordBuffer, word.len);
+    try buffer.seekBy(-@as(i64, @intCast(count)));
+    return word.len <= try buffer.getEndPos() and std.mem.eql(u8, wordBuffer[0..word.len], word);
 }
 
 /// Returns true if jsonString starts with an ECMA Script 5.1 identifier
-fn isStartOfEcmaScript51Identifier(jsonString: []const u8) bool {
-    const char = jsonString[0];
+fn isStartOfEcmaScript51Identifier(buffer: *Buffer) ParseErrors!bool {
+    const char = try buffer.peek();
     // Allowable Identifier starting characters
-    return char != TOKEN_COLON and (isEcmaScript51IdentifierUnicodeCharacter(char) or char == TOKEN_DOLLAR_SIGN or char == TOKEN_UNDERSCORE
-    // \uXXXX
-    or (jsonString.len >= 6 and jsonString[0] == TOKEN_REVERSE_SOLIDUS and jsonString[1] == 'u' and isHexDigit(jsonString[2]) and isHexDigit(jsonString[3]) and isHexDigit(jsonString[4]) and isHexDigit(jsonString[5])));
+    if (char == TOKEN_COLON) return false;
+    if (isEcmaScript51IdentifierUnicodeCharacter(char) or char == TOKEN_DOLLAR_SIGN or char == TOKEN_UNDERSCORE) return true;
+    if (try buffer.getEndPos() >= 6) {
+        var tokenBuffer: [6]u8 = undefined;
+        _ = try buffer.read(&tokenBuffer);
+        try buffer.seekBy(-@as(i64, tokenBuffer.len));
+        return tokenBuffer[0] == TOKEN_REVERSE_SOLIDUS and tokenBuffer[1] == 'u' and isHexDigit(tokenBuffer[2]) and isHexDigit(tokenBuffer[3]) and isHexDigit(tokenBuffer[4]) and isHexDigit(tokenBuffer[5]);
+    }
+
+    return false;
 }
 
 /// Returns true if the character is an ECMA Script 5.1 identifier unicode character
@@ -989,12 +1029,13 @@ fn isEcmaScript51IdentifierUnicodeCharacter(char: u8) bool {
 }
 
 /// Returns true if the character is an ECMA Script 5.1 identifier character
-fn isValidEcmaScript51IdentifierCharacter(jsonString: []const u8) bool {
-    return jsonString[0] != TOKEN_COLON and (isStartOfEcmaScript51Identifier(jsonString)
+fn isValidEcmaScript51IdentifierCharacter(buffer: *Buffer) ParseErrors!bool {
+    const char = try buffer.peek();
+    return char != TOKEN_COLON and (try isStartOfEcmaScript51Identifier(buffer)
     // TODO: or isUnicodeCombiningSpaceMark(jsonString[0])
-    or isUnicodeDigit(jsonString[0])
+    or isUnicodeDigit(char)
     // TODO: or isUnicodeConnectorPunctuation(jsonString[0])
-    or jsonString[0] == TOKEN_ZERO_WIDTH_NON_JOINER or jsonString[0] == TOKEN_ZERO_WIDTH_JOINER);
+    or char == TOKEN_ZERO_WIDTH_NON_JOINER or char == TOKEN_ZERO_WIDTH_JOINER);
 }
 
 /// Returns true if the character is a unicode digit
@@ -1021,11 +1062,11 @@ fn debug(comptime msg: []const u8, args: anytype) void {
 fn expectParseNumberToParseNumber(number: anytype, text: []const u8, config: ParserConfig) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+    var buffer = bufferFromText(text);
 
-    var index: usize = 0;
     const value = switch (@typeInfo(@TypeOf(number))) {
-        @typeInfo(ParseErrors) => parseNumber(text, config, allocator, &index),
-        else => try parseNumber(text, config, allocator, &index),
+        @typeInfo(ParseErrors) => parseNumber(&buffer, config, allocator),
+        else => try parseNumber(&buffer, config, allocator),
     };
 
     switch (@typeInfo(@TypeOf(number))) {
@@ -1062,13 +1103,15 @@ test "parse can parse a number" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var value = try parse("0", allocator);
+    var bufferOne = bufferFromText("0");
+    var value = try parseBuffer(&bufferOne, allocator);
     try std.testing.expectEqual(value.type, JsonType.integer);
     try std.testing.expectEqual(value.integer(), 0);
 
     value.deinit(allocator);
 
-    value = try parse("0.1", allocator);
+    var bufferTwo = bufferFromText("0.1");
+    value = try parseBuffer(&bufferTwo, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 0.1);
 
@@ -1082,7 +1125,8 @@ test "parse can parse a object" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const value = try parse("{\"foo\":\"bar\"}", allocator);
+    var buffer = bufferFromText("{\"foo\":\"bar\"}");
+    const value = try parseBuffer(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
 
     value.deinit(allocator);
@@ -1095,7 +1139,8 @@ test "parse can parse a array" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const value = try parse("[0,\"foo\",1.337]", allocator);
+    var buffer = bufferFromText("[0,\"foo\",1.337]");
+    const value = try parseBuffer(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 0);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "foo"));
@@ -1111,9 +1156,8 @@ test "RFC8259.3: parseValue can parse true" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "true";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("true");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.boolean);
     try std.testing.expectEqual(value.boolean(), true);
 
@@ -1128,9 +1172,8 @@ test "RFC8259.3: parseValue can parse false" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "false";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("false");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.boolean);
     try std.testing.expectEqual(value.boolean(), false);
 
@@ -1145,9 +1188,8 @@ test "RFC8259.3: parseValue can parse null" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "null";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("null");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.nil);
     try std.testing.expect(value.value == null);
 
@@ -1162,9 +1204,8 @@ test "RFC8259.4: parseObject can parse an empty object /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "{}";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("{}");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
@@ -1179,9 +1220,8 @@ test "RFC8259.4: parseObject can parse an empty object /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "{ }";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("{ }");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
@@ -1197,9 +1237,8 @@ test "RFC8259.4: parseObject can parse an empty object /3" {
     const allocator = gpa.allocator();
 
     // Create an empty object with all insignificant whitespace characters
-    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
-    var index: usize = 0;
-    const value = try parseValue(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}");
+    const value = try parseValue(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.object);
     try std.testing.expectEqual(value.object().len(), 0);
@@ -1214,8 +1253,8 @@ test "RFC8259.4: parseObject can parse a simple object /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("{\"key1\": \"foo\", \"key2\": \"foo2\", \"key3\": -1, \"key4\": [], \"key5\": { } }", CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("{\"key1\": \"foo\", \"key2\": \"foo2\", \"key3\": -1, \"key4\": [], \"key5\": { } }");
+    var jsonResult = try parseObject(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1250,8 +1289,8 @@ test "RFC8259.4: parseObject can parse a simple object /2" {
 
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
-    var index: usize = 0;
-    var jsonResult = try parseObject("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key1\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key3\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key4\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key5\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}", CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key1\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo2\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key3\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key4\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"key5\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}");
+    var jsonResult = try parseObject(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1286,8 +1325,8 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on trailing comma"
 
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
-    var index: usize = 0;
-    const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\", {},}", CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\", {},}");
+    const jsonResult = parseObject(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
     const Check = std.heap.Check;
@@ -1300,8 +1339,8 @@ test "RFC8259.4: parseObject returns UnexpectedTokenException on missing comma" 
 
     // Same text body as /1 but every inbetween character is the set of insignificant whitepsace
     // characters
-    var index: usize = 0;
-    const jsonResult = parseObject("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\" {}}", CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("{\"key1\": 1, \"key2\": \"two\", \"key3\": 3.0, \"key4\" {}}");
+    const jsonResult = parseObject(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.UnexpectedTokenError, jsonResult);
 
     const Check = std.heap.Check;
@@ -1312,9 +1351,8 @@ test "RFC8259.5: parseArray can parse an empty array /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "[]";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("[]");
+    const value = try parseArray(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 0);
@@ -1329,9 +1367,8 @@ test "RFC8259.5: parseArray can parse an empty array /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}");
+    const value = try parseArray(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 0);
@@ -1346,10 +1383,8 @@ test "RFC8259.5: parseArray can parse an simple array /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    //
-    const text = "[-1,-1.2,0,1,1.2,\"\",\"foo\",true,false,null,{},{\"foo\":\"bar\", \"baz\": {}}]";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("[-1,-1.2,0,1,1.2,\"\",\"foo\",true,false,null,{},{\"foo\":\"bar\", \"baz\": {}}]");
+    const value = try parseArray(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 12);
@@ -1364,10 +1399,8 @@ test "RFC8259.5: parseArray can parse an simple array /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    //
-    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}0\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}true\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}false\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}null\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"bar\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"baz\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}[\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}-1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}0\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}1.2\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}true\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}false\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}null\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"foo\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"bar\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d},\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"baz\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}:\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}{\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}}\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}]\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}");
+    const value = try parseArray(&buffer, CONFIG_RFC8259, allocator);
     errdefer value.deinit(allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.array().len(), 12);
@@ -1382,9 +1415,8 @@ test "RFC8259.5: parseArray returns UnexpectedTokenError on trailing comma" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "[1,\"two\",3.0,{},]";
-    var index: usize = 0;
-    const value = parseArray(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("[1,\"two\",3.0,{},]");
+    const value = parseArray(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.UnexpectedTokenError, value);
 
     const Check = std.heap.Check;
@@ -1395,9 +1427,8 @@ test "RFC8259.6: parseNumber can parse a integer /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "0";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("0");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.integer);
     try std.testing.expectEqual(value.integer(), 0);
 
@@ -1411,9 +1442,8 @@ test "RFC8259.6: parseNumber can parse a integer /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "1";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("1");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.integer);
     try std.testing.expectEqual(value.integer(), 1);
 
@@ -1427,9 +1457,8 @@ test "RFC8259.6: parseNumber can parse a integer /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "1337";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("1337");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.integer);
     try std.testing.expectEqual(value.integer(), 1337);
 
@@ -1443,9 +1472,8 @@ test "RFC8259.6: parseNumber can parse a integer /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-1337";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-1337");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.integer);
     try std.testing.expectEqual(value.integer(), -1337);
 
@@ -1459,9 +1487,8 @@ test "RFC8259.6: parseNumber can parse a float /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "1.0";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("1.0");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 1.0);
 
@@ -1475,9 +1502,8 @@ test "RFC8259.6: parseNumber can parse a float /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-1.0";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-1.0");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), -1.0);
 
@@ -1491,9 +1517,8 @@ test "RFC8259.6: parseNumber can parse a float /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "1337.0123456789";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("1337.0123456789");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 1337.0123456789);
 
@@ -1507,9 +1532,8 @@ test "RFC8259.6: parseNumber can parse a float /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-1337.0123456789";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-1337.0123456789");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), -1337.0123456789);
 
@@ -1523,9 +1547,8 @@ test "RFC8259.6: parseNumber can parse an exponent /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "13e37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("13e37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 13e37);
 
@@ -1539,9 +1562,8 @@ test "RFC8259.6: parseNumber can parse an exponent /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "13E37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("13E37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 13E37);
 
@@ -1555,9 +1577,8 @@ test "RFC8259.6: parseNumber can parse an exponent /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "13E+37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("13E+37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 13E+37);
 
@@ -1571,9 +1592,8 @@ test "RFC8259.6: parseNumber can parse an exponent /4" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "13E-37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("13E-37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 13E-37);
 
@@ -1587,9 +1607,8 @@ test "RFC8259.6: parseNumber can parse an exponent /5" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-13e37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-13e37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), -13e37);
 
@@ -1603,9 +1622,8 @@ test "RFC8259.6: parseNumber can parse an exponent /6" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-13E37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-13E37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), -13E37);
 
@@ -1619,9 +1637,8 @@ test "RFC8259.6: parseNumber can parse an exponent /7" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "-13E+37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("-13E+37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), -13E+37);
 
@@ -1635,9 +1652,8 @@ test "RFC8259.6: parseNumber can parse an exponent /8" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "13E-37";
-    var index: usize = 0;
-    const value = try parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("13E-37");
+    const value = try parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectEqual(value.type, JsonType.float);
     try std.testing.expectEqual(value.float(), 13E-37);
 
@@ -1651,9 +1667,8 @@ test "RFC8259.6: parseNumber fails on a repeating 0" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "00";
-    var index: usize = 0;
-    const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("00");
+    const value = parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.ParseNumberError, value);
 
     const Check = std.heap.Check;
@@ -1664,9 +1679,8 @@ test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "a0";
-    var index: usize = 0;
-    const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("a0");
+    const value = parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.ParseNumberError, value);
 
     const Check = std.heap.Check;
@@ -1677,9 +1691,8 @@ test "RFC8259.6: parseNumber fails on a non-minus and non-digit start /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "+0";
-    var index: usize = 0;
-    const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText("+0");
+    const value = parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.ParseNumberError, value);
 
     const Check = std.heap.Check;
@@ -1690,9 +1703,8 @@ test "RFC8259.6: parseNumber fails on number starting with decimal point" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = ".0";
-    var index: usize = 0;
-    const value = parseNumber(text, CONFIG_RFC8259, allocator, &index);
+    var buffer = bufferFromText(".0");
+    const value = parseNumber(&buffer, CONFIG_RFC8259, allocator);
     try std.testing.expectError(error.ParseNumberError, value);
 
     const Check = std.heap.Check;
@@ -1743,9 +1755,8 @@ test "JSON5.7 parseArray ignores multi-line comments /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "/* comment */[/* comment */1/* comment */,/* comment */\"two\"/* comment */,/* comment */3.0/* comment */,/* comment */{/* comment */},/* comment */'five'/* comment */,/* comment */{/* comment */six/* comment */:/* comment */0x07/* comment */}/* comment */]/* comment */";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("/* comment */[/* comment */1/* comment */,/* comment */\"two\"/* comment */,/* comment */3.0/* comment */,/* comment */{/* comment */},/* comment */'five'/* comment */,/* comment */{/* comment */six/* comment */:/* comment */0x07/* comment */}/* comment */]/* comment */");
+    const value = try parseArray(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 1);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "two"));
@@ -1764,9 +1775,8 @@ test "JSON5.7 parseArray ignores single-line comments /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "// comment \n[// comment \n1// comment \n,// comment \n\"two\"// comment \n,// comment \n3.0// comment \n,// comment \n{// comment \n},// comment \n'five'// comment \n,// comment \n{// comment \nsix// comment \n:// comment \n0x07// comment \n}// comment \n]// comment \n";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("// comment \n[// comment \n1// comment \n,// comment \n\"two\"// comment \n,// comment \n3.0// comment \n,// comment \n{// comment \n},// comment \n'five'// comment \n,// comment \n{// comment \nsix// comment \n:// comment \n0x07// comment \n}// comment \n]// comment \n");
+    const value = try parseArray(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 1);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "two"));
@@ -1785,8 +1795,8 @@ test "JSON5.7: parseObject ignores multi-line comments /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1819,8 +1829,8 @@ test "JSON5.7: parseObject ignores single-line comments /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -1853,9 +1863,8 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\"\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), ""));
 
@@ -1869,9 +1878,8 @@ test "RFC8259.7: parseStringWithTerminal can parse an empty string /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}\"\"\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), ""));
 
@@ -1885,9 +1893,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\"some string\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"some string\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "some string"));
 
@@ -1901,9 +1908,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\"some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\u{20}\u{09}\u{0A}\u{0a}\u{0D}\u{0d}string"));
 
@@ -1918,9 +1924,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /3" {
     const allocator = gpa.allocator();
 
     // some\"string
-    const text = "\"some\\\"string\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"some\\\"string\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\"string"));
 
@@ -1935,9 +1940,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /4" {
     const allocator = gpa.allocator();
 
     // some\\"string
-    const text = "\"some\\\\\\\"string\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"some\\\\\\\"string\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "some\\\"string"));
 
@@ -1952,9 +1956,8 @@ test "RFC8259.7: parseStringWithTerminal can parse a simple string /5" {
     const allocator = gpa.allocator();
 
     // ",\,\u{00-0f}
-    const text = "\"\\\"\\\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"\\\"\\\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "\"\\\u{00}\u{01}\u{02}\u{03}\u{04}\u{05}\u{06}\u{07}\u{08}\u{09}\u{0A}\u{0B}\u{0C}\u{0D}\u{0E}\u{0F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}"));
 
@@ -1969,9 +1972,8 @@ test "RFC8259.8.3: parseStringWithTerminal parsing results in equivalent strings
     const allocator = gpa.allocator();
 
     // Test that \\ equals \u{5C}
-    const text = "\"a\\\\b\"";
-    var index: usize = 0;
-    const value = try parseStringWithTerminal(text, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE, &index);
+    var buffer = bufferFromText("\"a\\\\b\"");
+    const value = try parseStringWithTerminal(&buffer, CONFIG_RFC8259, allocator, TOKEN_DOUBLE_QUOTE);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "a\u{5C}b"));
 
@@ -1985,9 +1987,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "someIdentifier";
-    var index: usize = 0;
-    const value = try parseEcmaScript51Identifier(text, allocator, &index);
+    var buffer = bufferFromText("someIdentifier");
+    const value = try parseEcmaScript51Identifier(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "someIdentifier"));
 
@@ -2001,9 +2002,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "_someIdentifier";
-    var index: usize = 0;
-    const value = try parseEcmaScript51Identifier(text, allocator, &index);
+    var buffer = bufferFromText("_someIdentifier");
+    const value = try parseEcmaScript51Identifier(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "_someIdentifier"));
 
@@ -2017,9 +2017,8 @@ test "JSON5; parseEcmaScript51Identifier can parse simple identifier /3" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "$someIdentifier";
-    var index: usize = 0;
-    const value = try parseEcmaScript51Identifier(text, allocator, &index);
+    var buffer = bufferFromText("$someIdentifier");
+    const value = try parseEcmaScript51Identifier(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "$someIdentifier"));
 
@@ -2033,9 +2032,8 @@ test "JSON5.3; parseEcmaScript51Identifier can parse simple identifier /2" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "\\u005FsomeIdentifier";
-    var index: usize = 0;
-    const value = try parseEcmaScript51Identifier(text, allocator, &index);
+    var buffer = bufferFromText("\\u005FsomeIdentifier");
+    const value = try parseEcmaScript51Identifier(&buffer, allocator);
     try std.testing.expectEqual(value.type, JsonType.string);
     try std.testing.expect(std.mem.eql(u8, value.string(), "\u{005f}someIdentifier"));
 
@@ -2049,8 +2047,8 @@ test "JSON5.3: parseObject can parse a simple object /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { } }", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { } }");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2083,8 +2081,8 @@ test "JSON5.3: parseObject can parse a simple object with trailing comma" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { }, }", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("{key1: \"foo\", ȡkey2: \"foo2\", \u{0221}key3 : -1, 'key4': [], \"key5\": { }, }");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2117,9 +2115,8 @@ test "JSON5.4 parseArray can parse a simple array /1" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "[1, \"two\", 3.0, {}, 'five', {six: 0x07}]";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("[1, \"two\", 3.0, {}, 'five', {six: 0x07}]");
+    const value = try parseArray(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 1);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "two"));
@@ -2192,20 +2189,20 @@ test "JSON5.6 parseNumber can parse nan" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var value = try parseNumber("NaN", CONFIG_JSON5, allocator, &index);
+    var buffer1 = bufferFromText("NaN");
+    var value = try parseNumber(&buffer1, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(JsonType.float, value.type);
     try std.testing.expectEqual(value, &JSON_POSITIVE_NAN);
     try std.testing.expect(std.math.isNan(value.float()));
 
-    index = 0;
-    value = try parseNumber("+NaN", CONFIG_JSON5, allocator, &index);
+    var buffer2 = bufferFromText("+NaN");
+    value = try parseNumber(&buffer2, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(JsonType.float, value.type);
     try std.testing.expectEqual(value, &JSON_POSITIVE_NAN);
     try std.testing.expect(std.math.isNan(value.float()));
 
-    index = 0;
-    value = try parseNumber("-NaN", CONFIG_JSON5, allocator, &index);
+    var buffer3 = bufferFromText("-NaN");
+    value = try parseNumber(&buffer3, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(JsonType.float, value.type);
     try std.testing.expectEqual(value, &JSON_NEGATIVE_NAN);
     try std.testing.expect(std.math.isNan(value.float()));
@@ -2218,9 +2215,8 @@ test "JSON5.7 parseArray ignores multi-line comments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "/* comment */[/* comment */1/* comment */,/* comment */\"two\"/* comment */,/* comment */3.0/* comment */,/* comment */{/* comment */},/* comment */'five'/* comment */,/* comment */{/* comment */six/* comment */:/* comment */0x07/* comment */}/* comment */]/* comment */";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("/* comment */[/* comment */1/* comment */,/* comment */\"two\"/* comment */,/* comment */3.0/* comment */,/* comment */{/* comment */},/* comment */'five'/* comment */,/* comment */{/* comment */six/* comment */:/* comment */0x07/* comment */}/* comment */]/* comment */");
+    const value = try parseArray(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 1);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "two"));
@@ -2239,9 +2235,8 @@ test "JSON5.7 parseArray ignores single-line comments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const text = "// comment \n[// comment \n1// comment \n,// comment \n\"two\"// comment \n,// comment \n3.0// comment \n,// comment \n{// comment \n},// comment \n'five'// comment \n,// comment \n{// comment \nsix// comment \n:// comment \n0x07// comment \n}// comment \n]// comment \n";
-    var index: usize = 0;
-    const value = try parseArray(text, CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("// comment \n[// comment \n1// comment \n,// comment \n\"two\"// comment \n,// comment \n3.0// comment \n,// comment \n{// comment \n},// comment \n'five'// comment \n,// comment \n{// comment \nsix// comment \n:// comment \n0x07// comment \n}// comment \n]// comment \n");
+    const value = try parseArray(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(value.type, JsonType.array);
     try std.testing.expectEqual(value.get(0).integer(), 1);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "two"));
@@ -2260,8 +2255,8 @@ test "JSON5.7: parseObject ignores multi-line comments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("/* comment */{/* comment */key1/* comment */:/* comment */\"foo\"/* comment */,/* comment */ȡkey2/* comment */:/* comment */\"foo2\"/* comment */,/* comment */\u{0221}key3/* comment */:/* comment */-1/* comment */,/* comment */'key4'/* comment */:/* comment */[/* comment */]/* comment */,/* comment */\"key5\"/* comment */:/* comment */{/* comment */}/* comment */,/* comment */}/* comment */");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2294,8 +2289,8 @@ test "JSON5.7: parseObject ignores single-line comments" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var index: usize = 0;
-    var jsonResult = try parseObject("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n", CONFIG_JSON5, allocator, &index);
+    var buffer = bufferFromText("// comment \n{// comment \nkey1// comment \n:// comment \n\"foo\"// comment \n,// comment \nȡkey2// comment \n:// comment \n\"foo2\"// comment \n,// comment \n\u{0221}key3// comment \n:// comment \n-1// comment \n,// comment \n'key4'// comment \n:// comment \n[// comment \n]// comment \n,// comment \n\"key5\"// comment \n:// comment \n{// comment \n}// comment \n,// comment \n}// comment \n");
+    var jsonResult = try parseObject(&buffer, CONFIG_JSON5, allocator);
     try std.testing.expectEqual(jsonResult.type, JsonType.object);
 
     try std.testing.expectEqual(jsonResult.object().contains("key1"), true);
@@ -2364,7 +2359,7 @@ test "README.md simple test" {
     defer std.debug.assert(gpa.deinit() == Check.ok);
     const allocator = gpa.allocator();
 
-    const value = try parse(
+    var buffer = bufferFromText(
         \\{
         \\  "foo": [
         \\    null,
@@ -2376,7 +2371,8 @@ test "README.md simple test" {
         \\    }
         \\  ]
         \\}
-    , allocator);
+    );
+    const value = try parseBuffer(&buffer, allocator);
     const bazObj = value.get("foo").get(4);
 
     bazObj.print(null);
@@ -2391,7 +2387,7 @@ test "README.md simple test json5" {
     defer std.debug.assert(gpa.deinit() == Check.ok);
     const allocator = gpa.allocator();
 
-    const value = try parseJson5(
+    var buffer = bufferFromText(
         \\{
         \\  foo: [
         \\    /* Some
@@ -2408,13 +2404,65 @@ test "README.md simple test json5" {
         \\    },
         \\  ],
         \\}
-    , allocator);
+    );
+    const value = try parseJson5Buffer(&buffer, allocator);
     const bazObj = value.get("foo").get(4);
 
     bazObj.print(null);
     try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
     defer value.deinit(allocator);
+}
+
+test "README.md simple test with stream source" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == std.heap.Check.ok);
+    const allocator = gpa.allocator();
+
+    var source = std.io.StreamSource{ .const_buffer = std.io.fixedBufferStream(
+        \\{
+        \\  foo: [
+        \\    /* Some
+        \\     * multi-line comment
+        \\     */ null,
+        \\    true,
+        \\    false,
+        \\    "bar",
+        \\    // Single line comment
+        \\    {
+        \\      baz: -13e+37,
+        \\      'nan': NaN,
+        \\      inf: +Infinity,
+        \\    },
+        \\  ],
+        \\}
+    ) };
+    var buffer = bufferFromStreamSource(&source);
+    const value = try parseJson5Buffer(&buffer, allocator);
+    const bazObj = value.get("foo").get(4);
+
+    bazObj.print(null);
+    try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
+
+    defer value.deinit(allocator);
+}
+
+test "README.md simple test from file" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == std.heap.Check.ok);
+    const allocator = gpa.allocator();
+
+    const file = try std.fs.cwd().openFile("testFiles/some.json", .{});
+    defer file.close();
+
+    const value = try parseFile(file, allocator);
+    errdefer value.deinit(allocator);
+    defer value.deinit(allocator);
+
+    const bazObj = value.get("foo").get(4);
+
+    bazObj.print(null);
+    try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 }
 
 // Check whether tests are executed.

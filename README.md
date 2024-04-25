@@ -48,6 +48,8 @@ exe.addPackagePath("json", "deps/zig-json/src/main.zig");
 
 # Usage
 
+## From a `[]u8`
+
 ```zig
 const json = @import("json");
 
@@ -76,6 +78,51 @@ bazObj.print(null);
 try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
 defer value.deinit(allocator);
+```
+
+```bash
+{
+  "baz": -130000000000000000000000000000000000000
+}%
+```
+
+## From a file
+
+*testFiles/some.json*
+```json
+{
+  "foo": [
+    null,
+    true,
+    false,
+    "bar",
+    {
+      "baz": -13e+37
+    }
+  ]
+}
+```
+
+```zig
+const json = @import("json");
+
+// ...
+
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+defer std.debug.assert(gpa.deinit() == std.heap.Check.ok);
+const allocator = gpa.allocator();
+
+const file = try std.fs.cwd().openFile("testFiles/some.json", .{});
+defer file.close();
+
+const value = try parseFile(file, allocator);
+errdefer value.deinit(allocator);
+defer value.deinit(allocator);
+
+const bazObj = value.get("foo").get(4);
+
+bazObj.print(null);
+try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 ```
 
 ```bash
