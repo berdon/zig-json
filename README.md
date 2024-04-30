@@ -6,7 +6,8 @@ _Note: The simple and usable part is a WIP :)_
 
 # Features
 
-- Parsing []u8 arrays, files, STDIN into JSON objects
+- Parsing []u8, files, STDIN into [JSON objects](#jsonobject)
+- Fully supports [JSON](https://datatracker.ietf.org/doc/html/rfc8259) and [JSON5](https://spec.json5.org/) specifications
 
 # Importing
 
@@ -306,7 +307,7 @@ enum {
 };
 ```
 
-## JsonObject
+## <a name="jsonobject"></a>JsonObject
 
 ```zig
 struct {
