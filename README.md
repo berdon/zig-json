@@ -4,6 +4,10 @@ Simple JSON ([RFC8259 Spec](https://www.rfc-editor.org/rfc/rfc8259)) and JSON5 (
 
 _Note: The simple and usable part is a WIP :)_
 
+# Features
+
+- Parsing []u8 arrays, files, STDIN into JSON objects
+
 # Importing
 
 ## Using Zig Packages
@@ -78,6 +82,51 @@ bazObj.print(null);
 try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 
 defer value.deinit(allocator);
+```
+
+```bash
+{
+  "baz": -130000000000000000000000000000000000000
+}%
+```
+
+## From STDIN
+
+*STDIN*
+```json
+{
+  "foo": [
+    null,
+    true,
+    false,
+    "bar",
+    {
+      "baz": -13e+37
+    }
+  ]
+}
+
+```
+
+```zig
+const json = @import("json");
+
+// ...
+
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+defer std.debug.assert(gpa.deinit() == std.heap.Check.ok);
+const allocator = gpa.allocator();
+
+const file = std.io.getStdIn();
+
+const value = try parseFile(file, allocator);
+errdefer value.deinit(allocator);
+defer value.deinit(allocator);
+
+const bazObj = value.get("foo").get(4);
+
+bazObj.print(null);
+try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 ```
 
 ```bash
@@ -277,6 +326,9 @@ struct {
 
     /// Return the value for key or null
     pub fn getOrNull(self: *JsonObject, key: []const u8) ?*JsonValue { }
+
+    /// Returns the JSON object's keys
+    pub fn keys(self: *JsonObject) [][]const u8 { }
 
     /// Print out the JSON object
     /// TODO: Need to handle proper character escaping

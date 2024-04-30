@@ -173,6 +173,11 @@ pub const JsonObject = struct {
         return null;
     }
 
+    /// Return the JSON object's members
+    pub fn keys(self: *JsonObject) [][]const u8 {
+        return self.map.keys();
+    }
+
     /// Print out the JSON object
     /// TODO: Need to handle proper character escaping
     pub fn print(self: *JsonObject, indent: ?usize) void {
@@ -525,30 +530,30 @@ fn parseValue(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Parse
         }
 
         // 0-9|- indicates a number
-        if (try isReservedWord(buffer, TOKEN_INFINITY) or try isReservedWord(buffer, TOKEN_NAN) or isNumberOrPlusOrMinus(char)) {
+        if (try isReservedInfinity(buffer) or try isReservedNan(buffer) or isNumberOrPlusOrMinus(char)) {
             var result = try parseNumber(buffer, config, allocator);
             errdefer result.deinit(allocator);
             break :result result;
         }
 
-        if (try isReservedWord(buffer, TOKEN_TRUE)) {
-            try buffer.skipBytes(TOKEN_TRUE.len);
+        if (try isReservedTrue(buffer)) {
+            try expectWord(buffer, TOKEN_TRUE);
             break :result &JSON_TRUE;
         }
 
-        if (try isReservedWord(buffer, TOKEN_FALSE)) {
-            try buffer.skipBytes(TOKEN_FALSE.len);
+        if (try isReservedFalse(buffer)) {
+            try expectWord(buffer, TOKEN_FALSE);
             break :result &JSON_FALSE;
         }
 
-        if (try isReservedWord(buffer, TOKEN_NULL)) {
-            try buffer.skipBytes(TOKEN_NULL.len);
+        if (try isReservedNull(buffer)) {
+            try expectWord(buffer, TOKEN_NULL);
             break :result &JSON_NULL;
         }
 
-        const leftOver = try buffer.substringOwned(try buffer.getPos(), 16, allocator);
-        defer allocator.free(leftOver);
-        debug("Unable to parse value from \"{s}...\"", .{leftOver});
+        var leftOverBuffer: [16]u8 = undefined;
+        _ = try buffer.read(&leftOverBuffer);
+        debug("Unable to parse value from \"{s}...\"", .{leftOverBuffer});
 
         return error.ParseValueError;
     };
@@ -725,9 +730,10 @@ fn parseStringWithTerminal(buffer: *Buffer, config: ParserConfig, allocator: All
 fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) ParseErrors!*JsonValue {
     var encodingType = NumberEncoding.integer;
     try skipWhiteSpaces(buffer, config);
-    const start = try buffer.getPos();
-    var startingDigitAt: usize = try buffer.getPos();
+    var startingDigitAt: usize = 0;
     var polarity: isize = 1;
+    var numberList = std.ArrayList(u8).init(allocator);
+    defer numberList.deinit();
 
     if (try buffer.getPos() >= try buffer.getEndPos()) {
         debug("Number cannot be zero length", .{});
@@ -737,6 +743,7 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
     // First character can be a minus or number
     if (config.parserType == ParserType.json5 and isPlusOrMinus(try buffer.peek()) or config.parserType == ParserType.rfc8259 and try buffer.peek() == TOKEN_MINUS) {
         polarity = if (try buffer.readByte() == TOKEN_MINUS) -1 else 1;
+        try numberList.append(buffer.lastByte().?);
         startingDigitAt += 1;
     }
 
@@ -745,19 +752,19 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
         return error.ParseNumberError;
     }
 
-    if (config.parserType == ParserType.json5 and try isReservedWord(buffer, TOKEN_INFINITY)) {
-        try buffer.skipBytes(TOKEN_INFINITY.len);
+    if (config.parserType == ParserType.json5 and try isReservedInfinity(buffer)) {
+        try expectWord(buffer, TOKEN_INFINITY);
         return if (polarity > 0) &JSON_POSITIVE_INFINITY else &JSON_NEGATIVE_INFINITY;
     }
 
-    if (config.parserType == ParserType.json5 and try isReservedWord(buffer, TOKEN_NAN)) {
-        try buffer.skipBytes(TOKEN_NAN.len);
+    if (config.parserType == ParserType.json5 and try isReservedNan(buffer)) {
+        try expectWord(buffer, TOKEN_NAN);
         return if (polarity > 0) &JSON_POSITIVE_NAN else &JSON_NEGATIVE_NAN;
     }
 
     // Next character either is a digit or a .
     if (try buffer.peek() == '0') {
-        try buffer.skipBytes(1);
+        try numberList.append(try buffer.readByte());
         if (try buffer.getPos() < try buffer.getEndPos()) {
             if (try buffer.peek() == TOKEN_ZERO) {
                 debug("Invalid number; number cannot start with multiple zeroes", .{});
@@ -765,11 +772,11 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
             }
             if (try buffer.peek() == 'x') {
                 encodingType = NumberEncoding.hex;
-                try buffer.skipBytes(1);
+                try numberList.append(try buffer.readByte());
             }
         }
     } else if (isNumber(try buffer.peek())) {
-        try buffer.skipBytes(1);
+        try numberList.append(try buffer.readByte());
     } else if (try buffer.peek() == TOKEN_PERIOD) {
         if (config.parserType == ParserType.rfc8259) {
             debug("Invalid number; RFS8259 doesn't support floating point numbers starting with a decimal point", .{});
@@ -777,7 +784,7 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
         }
 
         encodingType = NumberEncoding.float;
-        try buffer.skipBytes(1);
+        try numberList.append(try buffer.readByte());
         if (try buffer.getPos() >= try buffer.getEndPos()) {
             debug("Invalid number; decimal value must follow decimal point", .{});
             return error.ParseNumberError;
@@ -788,26 +795,26 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
     }
 
     // Walk through each character
-    while (try buffer.getPos() < try buffer.getEndPos() and ((encodingType != NumberEncoding.hex and isNumber(try buffer.peek())) or (encodingType == NumberEncoding.hex and isHexDigit(try buffer.peek())))) : (try buffer.skipBytes(1)) {}
+    while (try buffer.getPos() < try buffer.getEndPos() and ((encodingType != NumberEncoding.hex and isNumber(try buffer.peek())) or (encodingType == NumberEncoding.hex and isHexDigit(try buffer.peek())))) : (try numberList.append(try buffer.readByte())) {}
 
     // Handle decimal numbers
     if (try buffer.getPos() < try buffer.getEndPos() and encodingType != NumberEncoding.hex and try buffer.peek() == TOKEN_PERIOD) {
         encodingType = NumberEncoding.float;
-        try buffer.skipBytes(1);
-        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try buffer.skipBytes(1)) {}
+        try numberList.append(try buffer.readByte());
+        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try numberList.append(try buffer.readByte())) {}
     }
 
     // Handle exponent
     if (try buffer.getPos() < try buffer.getEndPos() and encodingType != NumberEncoding.hex and (try buffer.peek() == TOKEN_EXPONENT_LOWER or try buffer.peek() == TOKEN_EXPONENT_UPPER)) {
         encodingType = NumberEncoding.float;
-        try buffer.skipBytes(1);
+        try numberList.append(try buffer.readByte());
         if (!isNumberOrPlusOrMinus(try buffer.peek())) {
             return error.ParseNumberError;
         }
         // Handle preceeding +/-
-        try buffer.skipBytes(1);
+        try numberList.append(try buffer.readByte());
         // Handle the exponent value
-        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try buffer.skipBytes(1)) {}
+        while (try buffer.getPos() < try buffer.getEndPos() and isNumber(try buffer.peek())) : (try numberList.append(try buffer.readByte())) {}
     }
 
     if (try buffer.getPos() > try buffer.getEndPos()) @panic("Fail");
@@ -821,27 +828,27 @@ fn parseNumber(buffer: *Buffer, config: ParserConfig, allocator: Allocator) Pars
         else => return error.ParseNumberError,
     };
 
-    const intFloatBuffer = try buffer.substringOwned(start, try buffer.getPos(), allocator);
-    defer allocator.free(intFloatBuffer);
+    var numberString = try allocator.alloc(u8, numberList.items.len);
+    defer allocator.free(numberString);
+
+    for (numberList.items, 0..) |char, index| {
+        numberString[index] = char;
+    }
 
     // TODO: Figure out why this block couldn't be in the switch below; kept complaining about not being able to
     //  initialize the union
     var hexBuffer: []const u8 = undefined;
     if (encodingType == NumberEncoding.hex) {
-        hexBuffer = try buffer.substringOwned(startingDigitAt + 2, try buffer.getPos(), allocator);
+        hexBuffer = numberString[startingDigitAt + 2 .. numberString.len];
     }
 
     jsonValue.value = switch (encodingType) {
-        NumberEncoding.integer => .{ .integer = try std.fmt.parseInt(i64, intFloatBuffer, 10) },
-        NumberEncoding.float => .{ .float = try std.fmt.parseFloat(f64, intFloatBuffer) },
+        NumberEncoding.integer => .{ .integer = try std.fmt.parseInt(i64, numberString, 10) },
+        NumberEncoding.float => .{ .float = try std.fmt.parseFloat(f64, numberString) },
         // parseInt doesn't support 0x so we have to skip it and manually apply the sign
         NumberEncoding.hex => .{ .integer = polarity * try std.fmt.parseInt(i64, hexBuffer, 16) },
         else => return error.ParseNumberError,
     };
-
-    if (encodingType == NumberEncoding.hex) {
-        allocator.free(hexBuffer);
-    }
 
     return jsonValue;
 }
@@ -857,16 +864,16 @@ fn parseEcmaScript51Identifier(buffer: *Buffer, allocator: Allocator) ParseError
             }
 
             var buf: [4]u8 = undefined;
-            const intBuffer = try buffer.substringOwned(try buffer.getPos() + 2, try buffer.getPos() + 6, allocator);
-            defer allocator.free(intBuffer);
-            const intValue = try std.fmt.parseInt(u21, intBuffer, 16);
+            try expectOnly(buffer, TOKEN_REVERSE_SOLIDUS);
+            try expectOnly(buffer, 'u');
+            _ = try buffer.read(&buf);
+            const intValue = try std.fmt.parseInt(u21, &buf, 16);
+            buf = undefined;
             const len = try std.unicode.utf8Encode(intValue, &buf);
             var i: usize = 0;
             while (i < len) : (i += 1) {
                 try characters.append(buf[i]);
             }
-
-            try buffer.skipBytes(6);
         } else {
             try characters.append(try buffer.readByte());
         }
@@ -998,13 +1005,30 @@ fn isNumber(char: u8) bool {
     return (char >= 48 and char <= 57);
 }
 
-/// Returns true if jsonString starts with word
-fn isReservedWord(buffer: *Buffer, word: []const u8) ParseErrors!bool {
-    if (try buffer.getPos() + word.len > try buffer.getEndPos()) return false;
-    var wordBuffer: [128]u8 = undefined;
-    const count = try buffer.readN(&wordBuffer, word.len);
-    try buffer.seekBy(-@as(i64, @intCast(count)));
-    return word.len <= try buffer.getEndPos() and std.mem.eql(u8, wordBuffer[0..word.len], word);
+fn isReservedFalse(buffer: *Buffer) ParseErrors!bool {
+    return try buffer.peek() == TOKEN_FALSE[0];
+}
+
+fn isReservedInfinity(buffer: *Buffer) ParseErrors!bool {
+    return try buffer.peek() == TOKEN_INFINITY[0];
+}
+
+fn isReservedNan(buffer: *Buffer) ParseErrors!bool {
+    return try buffer.peek() == TOKEN_NAN[0] and try buffer.peekNext() == TOKEN_NAN[1];
+}
+
+fn isReservedNull(buffer: *Buffer) ParseErrors!bool {
+    return try buffer.peek() == TOKEN_NULL[0] and try buffer.peekNext() == TOKEN_NULL[1];
+}
+
+fn isReservedTrue(buffer: *Buffer) ParseErrors!bool {
+    return try buffer.peek() == TOKEN_TRUE[0];
+}
+
+fn expectWord(buffer: *Buffer, word: []const u8) ParseErrors!void {
+    for (word) |c| {
+        try expectOnly(buffer, c);
+    }
 }
 
 /// Returns true if jsonString starts with an ECMA Script 5.1 identifier
@@ -1014,10 +1038,7 @@ fn isStartOfEcmaScript51Identifier(buffer: *Buffer) ParseErrors!bool {
     if (char == TOKEN_COLON) return false;
     if (isEcmaScript51IdentifierUnicodeCharacter(char) or char == TOKEN_DOLLAR_SIGN or char == TOKEN_UNDERSCORE) return true;
     if (try buffer.getEndPos() >= 6) {
-        var tokenBuffer: [6]u8 = undefined;
-        _ = try buffer.read(&tokenBuffer);
-        try buffer.seekBy(-@as(i64, tokenBuffer.len));
-        return tokenBuffer[0] == TOKEN_REVERSE_SOLIDUS and tokenBuffer[1] == 'u' and isHexDigit(tokenBuffer[2]) and isHexDigit(tokenBuffer[3]) and isHexDigit(tokenBuffer[4]) and isHexDigit(tokenBuffer[5]);
+        return try buffer.peek() == TOKEN_REVERSE_SOLIDUS and try buffer.peekNext() == 'u';
     }
 
     return false;
@@ -1145,6 +1166,27 @@ test "parse can parse a array" {
     try std.testing.expectEqual(value.get(0).integer(), 0);
     try std.testing.expect(std.mem.eql(u8, value.get(1).string(), "foo"));
     try std.testing.expectEqual(value.get(2).float(), 1.337);
+
+    value.deinit(allocator);
+
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "parse can parse an object" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var buffer = bufferFromText("{\"foo\":\"bar\", \"zig\":\"zabim\"}");
+    const value = try parseBuffer(&buffer, allocator);
+    try std.testing.expectEqual(value.type, JsonType.object);
+    try std.testing.expect(std.mem.eql(u8, value.get("foo").string(), "bar"));
+    const keys = value.object().keys();
+
+    // TODO: Improve these conditions - can't rely on deterministic key ordering
+    try std.testing.expectEqual(2, keys.len);
+    try std.testing.expectEqualStrings("foo", keys[0]);
+    try std.testing.expectEqualStrings("zig", keys[1]);
 
     value.deinit(allocator);
 
