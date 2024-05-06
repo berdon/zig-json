@@ -157,6 +157,22 @@ pub const JsonObject = struct {
         return self.map.contains(key);
     }
 
+    /// Whether the object is equivalent to another object
+    pub fn eql(self: *JsonObject, other: *JsonObject) bool {
+        // Handle the easy case first
+        if (self.len() != other.len()) {
+            return false;
+        }
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            if (!other.contains(entry.key_ptr.*) or !entry.value_ptr.*.eql(other.get(entry.key_ptr.*))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// Return the value for key or panic
     pub fn get(self: *JsonObject, key: []const u8) *JsonValue {
         if (self.map.get(key)) |value| {
@@ -235,6 +251,25 @@ pub const JsonArray = struct {
     /// Return the items array directly ¯\_(ツ)_/¯
     pub fn items(self: *JsonArray) []*JsonValue {
         return self.array.items;
+    }
+
+    /// Whether the object is equivalent to another object
+    pub fn eql(self: *JsonArray, other: *JsonArray) bool {
+        const length: usize = self.len();
+        // Handle the easy case first
+        if (length != other.len()) {
+            return false;
+        }
+
+        var i: usize = 0;
+
+        while (i < length) : (i += 1) {
+            if (!self.array.items[i].eql(other.array.items[i])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// Return the item at the index or panic if exceeding normal bounds
@@ -350,6 +385,31 @@ pub const JsonValue = struct {
             JsonType.array => self.value.?.array.len(),
             JsonType.string => self.value.?.string.len,
             else => @panic("JsonType doesn't support len()"),
+        };
+    }
+
+    /// Return true if the two items are deeply equal
+    pub fn eql(self: *JsonValue, other: *JsonValue) bool {
+        // Avoid crashes due to nulls
+        if ((self.value == null and other.value != null) or
+            (self.value != null and other.value == null))
+        {
+            return false;
+        }
+
+        if (self.type != other.type) {
+            return false;
+        }
+
+        return switch (self.type) {
+            JsonType.object => self.object().eql(other.object()),
+            JsonType.array => self.array().eql(other.array()),
+            JsonType.string => std.mem.eql(u8, self.string(), other.string()),
+            // TODO: somehow generate these cases at comptime?
+            JsonType.integer => self.integer() == other.integer(),
+            JsonType.float => self.float() == other.float(),
+            JsonType.boolean => self.boolean() == other.boolean(),
+            JsonType.nil => true,
         };
     }
 
@@ -2507,5 +2567,199 @@ test "README.md simple test from file" {
     try std.testing.expectEqual(bazObj.get("baz").float(), -13e+37);
 }
 
+fn testEquality(allocator: std.mem.Allocator, string1: []const u8, string2: []const u8) !void {
+    const value1 = try parse(string1, allocator);
+    const value2 = try parse(string2, allocator);
+
+    try std.testing.expect(value1.eql(value2));
+    value1.deinit(allocator);
+    value2.deinit(allocator);
+}
+
+// Positive equality tests
+// Are these base type tests worth checking? I think the compiler optimizes the "different" values away
+test "Test integer equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "5";
+    try testEquality(allocator, body, "5");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test boolean equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "true";
+    try testEquality(allocator, body, "true");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test float equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "84793.0";
+    try testEquality(allocator, body, "84793.0");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test string equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body =
+        \\"a string to parse"
+    ;
+
+    try testEquality(allocator, body, "\"a string to parse\"");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test trivial array equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "[]";
+    try testEquality(allocator, body, "[]");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test single type array equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "[5, 3, 8, 9, 53]";
+    try testEquality(allocator, body, "[5, 3, 8, 9, 53]");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test trivial object equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "{}";
+
+    try testEquality(allocator, body, "{}");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test basic object equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body =
+        \\{"an": "object", "even": true}
+    ;
+    try testEquality(allocator, body,
+        \\{"an": "object", "even": true}
+    );
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test deep object equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body =
+        \\{"an": "object", "even": {"with": "fields", "and": ["an", "array", "inside", "that", {"object": 3}]}}
+    ;
+
+    try testEquality(allocator, body,
+        \\{"even": {"and": ["an", "array", "inside", "that", {"object": 3}], "with": "fields"}, "an": "object"}
+    );
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test deep array equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body =
+        \\[5, 3.0, false, 9, "a big string", {"an": "object", "even": true}, ["a", "b", "c"]]
+    ;
+
+    try testEquality(allocator, body,
+        \\[5, 3.0, false, 9, "a big string", {"an": "object", "even": true}, ["a", "b", "c"]]
+    );
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test null equality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "null";
+
+    try testEquality(allocator, body, "null");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+// Add in a few negative tests for some common gotchas
+fn testInequality(allocator: std.mem.Allocator, string1: []const u8, string2: []const u8) !void {
+    const value1 = try parse(string1, allocator);
+    const value2 = try parse(string2, allocator);
+
+    try std.testing.expect(!value1.eql(value2));
+    value1.deinit(allocator);
+    value2.deinit(allocator);
+}
+
+test "Test integer-float inequality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "6.0";
+
+    try testInequality(allocator, body, "6");
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test anything-null inequality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const examples = [_][]const u8{ "6.0", "5", "{}", "[]", "\"\"", "true" };
+    var i: usize = 0;
+    while (i < examples.len) : (i += 1) {
+        try testInequality(allocator, examples[i], "null");
+    }
+
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test small float inequality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "6.0";
+    try testInequality(allocator, body, "6.0001");
+
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test empty-filled object inequality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "{}";
+    try testInequality(allocator, body,
+        \\{"trivial": "key"}
+    );
+
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
+
+test "Test empty-filled array inequality" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const body = "[]";
+    try testInequality(allocator, body,
+        \\["trivial"]
+    );
+
+    const Check = std.heap.Check;
+    try std.testing.expect(gpa.deinit() == Check.ok);
+}
 // Check whether tests are executed.
 //test{try std.testing.expect(false);}
